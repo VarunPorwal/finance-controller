@@ -98,6 +98,16 @@ a task complete. For anything touching matching, rules or tiering, also run
 - **`DATABASE_URL_READONLY` points at the owner until day 8.** The
   text-to-SQL guard is not yet backed by a real read-only role. Don't
   treat it as enforced.
+- **The IDFC, ICICI and Tally-XML shapes in `fc/ingest/` are invented, not
+  sourced from a real export.** The PRD gives HDFC's NEFT format, the UPI/
+  IMPS/RTGS/NACH shapes, and the Tally field table precisely, but nothing
+  concrete for IDFC/ICICI narrations or a Tally XML tag schema — the demo
+  only ever sees generator output, so this is fine, but it means the
+  generator (Prompt 3) is the sole source of truth for those shapes. If
+  either side changes — a parser regex in `fc/ingest/narration/idfc.py` or
+  `icici.py`, the XML tag aliases in `fc/ingest/tally.py`, or what the
+  generator emits — change the other side in the same commit, or ingestion
+  silently stops matching what it's fed.
 
 ## Quality gates (block merge)
 

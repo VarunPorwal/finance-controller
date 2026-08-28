@@ -938,9 +938,9 @@ finance-controller/
 ### 4.1.4 Narration patterns
 | Rail | Pattern | Reference |
 |---|---|---|
-| NEFT (HDFC) | `NEFT CR:[UTR]/[party]/[ref]` slash-delim | 22ch: 4-char bank + 2-digit year + 3-digit DOY + 7-digit seq → `HDFC2268012345678` |
-| NEFT/RTGS (IDFC) | hyphen-delim, UTR in segment 2 | 22ch |
-| RTGS | `RBIA...` | 22ch |
+| NEFT (HDFC) | `NEFT CR:[UTR]/[party]/[ref]` slash-delim | 16ch: 4-char IFSC prefix + 2-digit year + 3-digit DOY + 7-digit seq → `HDFC262260123456` |
+| NEFT/RTGS (IDFC) | hyphen-delim, UTR in segment 2 | 16ch — the UTR shape is an RBI-wide scheme, not per-bank, so it's identical across banks |
+| RTGS | `RBIA...` | 16ch, same scheme |
 | IMPS | `IMPS/[ref]` or `IMPS CR [ref]`, varies by bank | 12-digit RRN, **not** UTR. Remitter truncated 10–15ch |
 | UPI | `UPI-{payee}-{vpa}-{ifsc}-{ref}-{note}` hyphen-delim | 12-digit numeric |
 | NACH | batch ref + sponsor bank code only | one line = 200–500 mandates |
@@ -1910,8 +1910,8 @@ class NarrationParser(Protocol):
 
 | Profile | Delimiter | Reference extraction |
 |---|---|---|
-| `hdfc` | `/` | `NEFT CR:{UTR}/{party}/{ref}`, UTR = 22 chars, 4-char bank + 2-digit year + 3-digit DOY + 7-digit seq |
-| `idfc` | `-` | UTR validated by shape in segment 2; UPI ref is 12 digits; NACH is a batch ref |
+| `hdfc` | `/` | `NEFT CR:{UTR}/{party}/{ref}`, UTR = 16 chars, 4-char IFSC prefix + 2-digit year + 3-digit DOY + 7-digit seq |
+| `idfc` | `-` | UTR validated by shape in segment 2, same 16-char scheme as HDFC (RBI-wide, not per-bank); UPI ref is 12 digits; NACH is a batch ref |
 | `icici` | mixed | rail prefix then reference token |
 | `generic` | regex battery | try each known reference shape, take the highest-confidence |
 

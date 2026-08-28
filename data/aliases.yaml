@@ -1,0 +1,46 @@
+# Counterparty alias table — PRD §0.2, replaces embeddings for the buildathon.
+#
+# Loaded once by fc.ingest.aliases.load_aliases. Each entry's `canonical` and
+# `aliases` are matched after fc.ingest.aliases normalise_counterparty's
+# normalisation (uppercase, rail-prefix strip, punctuation strip, whitespace
+# collapse) — so list aliases in roughly the form a bank or Tally narration
+# would actually carry them, not hand-pre-cleaned.
+
+- canonical: BLINKIT
+  aliases: [BLNKT, "BLNKT/SETTL", GROFERS, "GROFERS INDIA", "BLINKIT COMMERCE",
+            "BLINKIT COMMERCE PVT LTD", "HANDS ON TRADES PVT LTD"]
+
+- canonical: ZEPTO
+  aliases: [ZEPTO, "ZEPTO MARKETPLACE", KIRANAKART, "KIRANAKART TECH",
+            "KIRANAKART TECHNOLOGIES", "KIRANAKART TECHNOLOGIES PVT LTD"]
+
+- canonical: RAZORPAY
+  aliases: [RAZORPAY, RZP, "RAZORPAY SOFTWARE", RZRPAY,
+            "RAZORPAY SOFTWARE PRIVATE LIMITED", "RAZORPAY SETTLEMENT"]
+
+- canonical: HDFC BANK
+  aliases: [HDFC, "HDFC BANK LTD", HDFCBANK, "HDFC BANK LIMITED"]
+
+- canonical: ICICI BANK
+  aliases: [ICICI, "ICICI BANK LTD", ICICIBANK]
+
+- canonical: IDFC FIRST BANK
+  aliases: [IDFC, "IDFC FIRST", IDFCFIRST, "IDFC FIRST BANK LTD"]
+
+- canonical: LUMEA
+  aliases: [LUMEA, "LUMEA PERSONAL CARE", "LUMEA D2C", "LUMEA PERSONAL CARE PVT LTD"]
+
+- canonical: SWIGGY
+  aliases: [SWIGGY, "SWIGGY LTD", "BUNDL TECHNOLOGIES", "BUNDL TECHNOLOGIES PVT LTD"]
+
+- canonical: AMAZON PAY
+  aliases: ["AMAZON PAY", AMAZONPAY, "AMAZON PAY INDIA", "AMAZON PAY INDIA PVT LTD"]
+
+- canonical: PHONEPE
+  aliases: [PHONEPE, "PHONEPE PVT LTD", "PHONEPE INTERNET PRIVATE LIMITED"]
+
+- canonical: GOOGLE PAY
+  aliases: ["GOOGLE PAY", GOOGLEPAY, GPAY]
+
+- canonical: NPCI
+  aliases: [NPCI, "NATIONAL PAYMENTS CORPORATION OF INDIA"]

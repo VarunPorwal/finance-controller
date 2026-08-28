@@ -21,6 +21,7 @@ dev = [
     "hypothesis>=6.112",
     "mypy>=1.11",
     "ruff>=0.6",
+    "types-pyyaml>=6.0.12.20260815",
 ]
 
 [tool.uv.workspace]
