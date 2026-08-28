@@ -31,21 +31,29 @@ need, not the whole file).
 
 ## Commands
 
-```
-make setup       uv sync + npm install
-make api         uvicorn, reload
-make web         next dev
-make demo        seed + full reconciliation
-make demo-local  same, local Postgres, LLM_MODE=cache_only, no network
-make eval        accuracy suite, prints the metrics table
-make migrate     alembic upgrade head
-make generate    synthetic corpus (SEED=42 N=500)
-make test        pytest
-make typecheck   mypy --strict engine/src
-```
+**GNU Make is not installed on this machine and is not going to be.** The
+Makefile is the canonical description of the commands; `scripts/dev.ps1` is what
+actually runs here. The two mirror each other target for target — change one,
+change the other.
 
-Run `make test` and `make typecheck` before reporting a task complete.
-For anything touching matching, rules or tiering, also run `make eval`.
+| Target | PowerShell (use this) | Does |
+|---|---|---|
+| `make setup` | `.\scripts\dev.ps1 setup` | uv sync + npm install |
+| `make api` | `.\scripts\dev.ps1 api` | uvicorn, reload |
+| `make web` | `.\scripts\dev.ps1 web` | next dev |
+| `make demo` | `.\scripts\dev.ps1 demo` | seed + full reconciliation |
+| `make demo-local` | `.\scripts\dev.ps1 demo-local` | same, local Postgres, LLM_MODE=cache_only, no network |
+| `make eval` | `.\scripts\dev.ps1 eval` | accuracy suite, prints the metrics table |
+| `make migrate` | `.\scripts\dev.ps1 migrate` | alembic upgrade head |
+| `make generate` | `.\scripts\dev.ps1 generate -Seed 42 -N 500` | synthetic corpus |
+| `make test` | `.\scripts\dev.ps1 test` | pytest |
+| `make lint` | `.\scripts\dev.ps1 lint` | ruff check + format check |
+| `make typecheck` | `.\scripts\dev.ps1 typecheck` | mypy --strict engine/src |
+| `make client` | `.\scripts\dev.ps1 client` | regenerate web/lib/api.ts |
+
+Run `.\scripts\dev.ps1 test` and `.\scripts\dev.ps1 typecheck` before reporting
+a task complete. For anything touching matching, rules or tiering, also run
+`.\scripts\dev.ps1 eval`.
 
 ## Conventions
 
@@ -59,6 +67,7 @@ For anything touching matching, rules or tiering, also run `make eval`.
 - Frontend calls the generated client in `web/lib/api.ts`. Never hand-write
   fetch. Regenerate with `make client` after any Pydantic change.
 - Never use localStorage or sessionStorage in the frontend.
+
 
 ## Things that are easy to get wrong here
 
@@ -82,6 +91,13 @@ For anything touching matching, rules or tiering, also run `make eval`.
 - **Fuzzy matches cap at 0.75 and never auto-close.** Enforced by assertion.
 - **Subset-sum with multiple valid subsets returns None**, producing an
   exception. Never pick one.
+  - **RLS tests must run as `fc_app_user`, not the owner.** `neondb_owner`
+  carries `rolbypassrls` via Neon's `neon_superuser`, so `FORCE ROW LEVEL
+  SECURITY` doesn't constrain it. Verifying tenant isolation on the owner
+  connection gives a false pass. Use `DATABASE_URL_APP`.
+- **`DATABASE_URL_READONLY` points at the owner until day 8.** The
+  text-to-SQL guard is not yet backed by a real read-only role. Don't
+  treat it as enforced.
 
 ## Quality gates (block merge)
 

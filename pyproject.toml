@@ -1,0 +1,52 @@
+[project]
+name = "finance-controller"
+version = "0.1.0"
+description = "AI Finance Controller — API, persistence and migrations."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fc-engine",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pgvector>=0.3",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.112",
+    "mypy>=1.11",
+    "ruff>=0.6",
+]
+
+[tool.uv.workspace]
+members = ["engine"]
+
+[tool.uv.sources]
+fc-engine = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["eval: accuracy suite, excluded from the default run"]
+addopts = "-m 'not eval'"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+namespace_packages = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# The PRD is the specification, not source. Ruff must not touch its code blocks.
+extend-exclude = ["docs", "web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fc", "api", "db"]
