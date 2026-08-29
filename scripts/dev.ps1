@@ -19,7 +19,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'api', 'web', 'demo', 'demo-local', 'eval', 'migrate',
+    [ValidateSet('setup', 'api', 'web', 'check', 'demo', 'demo-local', 'eval', 'migrate',
                  'generate', 'test', 'lint', 'typecheck', 'client', 'help')]
     [string]$Target = 'help',
 
@@ -59,7 +59,8 @@ function Show-Help {
         'web'        = 'next dev'
         'demo'       = 'seed + full reconciliation'
         'demo-local' = 'same, local Postgres, LLM_MODE=cache_only, no network'
-        'eval'       = 'accuracy suite, prints the metrics table'
+        'check'      = 'lint + typecheck + test + eval; run this before every commit'
+        'eval'       = 'accuracy suite; exits non-zero when a PRD 12.5 gate fails'
         'migrate'    = 'alembic upgrade head'
         'generate'   = 'synthetic corpus (-Seed 42 -N 500)'
         'test'       = 'pytest'
@@ -114,8 +115,24 @@ function Invoke-DemoLocal {
 }
 
 function Invoke-Eval {
-    # Runs with no database and no network (PRD §3.7).
+    # Runs with no database and no network (PRD §3.7). Exits non-zero when a
+    # §12.5 gate fails, so it can actually block a merge rather than printing a
+    # number nobody compares to anything.
     Invoke-Step uv run python -m fc.eval.report
+}
+
+function Invoke-Check {
+    <#
+      Everything that gates a commit. `test` deliberately excludes the eval suite
+      (it needs the generated corpus and is slow), which meant the
+      false_auto_resolutions gate - the merge blocker this whole submission rests
+      on - ran only when somebody typed `pytest -m eval` by hand. Run this, not
+      `test`.
+    #>
+    Invoke-Lint
+    Invoke-Typecheck
+    Invoke-Test
+    Invoke-Eval
 }
 
 function Invoke-Migrate {
@@ -152,6 +169,7 @@ try {
         'web'        { Invoke-Web }
         'demo'       { Invoke-Demo }
         'demo-local' { Invoke-DemoLocal }
+        'check'      { Invoke-Check }
         'eval'       { Invoke-Eval }
         'migrate'    { Invoke-Migrate }
         'generate'   { Invoke-Generate }

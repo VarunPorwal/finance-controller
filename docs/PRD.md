@@ -1997,7 +1997,8 @@ def match_batch(bank_credit, candidates, tol_paise):
         [r.net_paise for r in candidates],
         target=bank_credit.amount_paise,
         tolerance=tol_paise,
-        max_time_ms=SUBSET_TIMEOUT_MS,            # 500ms hard cap
+        step_budget=SUBSET_STEP_BUDGET,           # 200,000 DP writes — the binding limit
+        max_time_ms=SUBSET_TIMEOUT_MS,            # 500ms — backstop only, must never fire
     )
     if len(subsets) == 1:
         return Match(..., confidence=0.88)
@@ -2006,7 +2007,29 @@ def match_batch(bank_credit, candidates, tol_paise):
     return None
 ```
 
+`net_paise` is the settlement leg as ingest stored it — a payment row's `credit`,
+already net of fee, and the fee already contains the GST. Subtracting `fee` or
+`tax` again is the double deduction `seed._check_settlement_arithmetic` exists to
+catch.
+
 **Two guards that matter:** the `MAX_SUBSET_N` cap prevents exponential blowup, and multiple valid subsets produce an *exception*, not a coin flip. Being ambiguous is a legitimate output.
+
+**Bounding the search deterministically.** A wall clock inside a matching decision
+makes the output a function of machine speed: the same corpus yields different
+exceptions on a loaded CI box than on a laptop, which breaks the §12.5
+determinism gate intermittently. So the **binding** limit is a step budget — a
+count of DP state writes, a pure function of the input — alongside a 50,000-state
+cap. `SUBSET_TIMEOUT_MS` is retained as a **backstop whose firing is a bug, not a
+fallback**: it means the step budget was mis-calibrated and the run is no longer
+deterministic, so it is logged with the credit id and step count, counted as
+`subset_sum_wall_clock_tripped`, and asserted at zero in the eval suite. Both
+limits produce the same outcome — no match, a refusal, never a guess.
+
+Measured headroom (seed 42): 14 rows consume 469 steps, 25 rows 5,160, and the
+worst legal input (40 distinct amounts) 36,310 — 18% of the budget at 46 ms. On
+adversarial wide-amount inputs the 50,000-**state** cap binds first, at ~25% of
+the step budget. The 200-identical-amounts pathological case costs 594 steps,
+because the DP is keyed on reachable sums rather than on subsets.
 
 ### Stage 5 — fuzzy scoring
 ```
@@ -3517,7 +3540,7 @@ Cut from the bottom. Never from the differentiators.
 | 4 | **Schema change after freeze** | M | H | Freeze 27 Aug; Alembic makes any change a versioned step | Roll forward only; never edit a shipped migration |
 | 5 | **Frontend/backend type drift** | M | M | `openapi-typescript` regeneration in the build; CI fails on drift | Build failure points at the exact broken call site |
 | 6 | **Float creeps into the money path** | M | H | Integer paise everywhere; AST guard in CI | Property test catches it before merge |
-| 7 | **Subset-sum pathological blowup** | M | M | `MAX_SUBSET_N=40`, 500 ms timeout, settlement-id fast path | Falls through to fuzzy; produces an exception, never a hang |
+| 7 | **Subset-sum pathological blowup** | M | M | `MAX_SUBSET_N=40`, `SUBSET_STEP_BUDGET=200_000` deterministic step budget (binding) plus a 50,000-state cap, 500 ms wall clock as a backstop that must never fire, settlement-id fast path | Falls through to fuzzy; produces an exception, never a hang — and the bound is a pure function of the input, so the same seed abstains identically on every machine |
 | 8 | **PDF extraction hallucinates rows** | M | L | Balance-continuity verification rejects it | **This is the feature.** Demo the rejection |
 | 9 | **Prompt injection via narration** | M | M | Structural (LLM cannot decide), delimiting, sanitisation, schema constraint, human gate | Seeded example demonstrates it failing safely |
 | 10 | **Router bug causes infinite rotation or silent degradation** | M | H | Bounded scan; every route ends in a terminal; `/agent/health` exposes state; UI status strip | `LLM_MODE=off` disables the router entirely and everything still works |
@@ -3813,6 +3836,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 | 1.0 | 27 Aug 2026 | Initial PRD |
 | 2.0 | 27 Aug 2026 | Added full architecture, schemas, API surface, Gemini spec, D6/D7 |
 | 4.0 | 27 Aug 2026 | **BUILD LOCK.** Added §0 Scope Lock: MT940, bulk rule import, cluster editing, embeddings, similar-retrieval and SSO cut. PDF extraction (D6) explicitly retained. All seven differentiators in scope. Lumea merchant profile defined. Schedule revised for solo builder. Emergency cut order added |
+| 3.2 | 29 Aug 2026 | §6.3 stage 4: the subset-sum bound is now a deterministic **step budget** (binding) with the 500 ms clock demoted to a backstop that must never fire — a wall clock in a matching decision made the output a function of machine speed and broke the §12.5 determinism gate intermittently. §15 risk 7 updated to match. Clarified that `net_paise` is the stored settlement leg, not gross minus fee minus tax. |
 | 3.1 | 27 Aug 2026 | **FINAL.** Merged v2 into v3: feature inventory (§2.5), differentiators D1–D7 (§2.6), repo and module map (§3.7), real-world data contracts (§4.1), stage-by-stage agent flow (§6.10), expected outcomes (§11.5), pitch lines (§16.1). Nothing from either version is now missing |
 | 3.0 | 27 Aug 2026 | Master specification: 5-layer architecture, complete DDL with RLS, full API spec, AI router with risk guards, security architecture with prompt-injection defence, compliance mapping, scalability tiers, testing pyramid with 17 scenarios and quality gates, hour-level build plan, 15-risk register, glossary, 8 appendices |
 

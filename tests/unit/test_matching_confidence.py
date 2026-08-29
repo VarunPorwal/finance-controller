@@ -20,6 +20,7 @@ _QUANTUM = Decimal("0.0001")
 
 def _inputs(**overrides: object) -> ConfidenceInputs:
     base = ConfidenceInputs(
+        stage="exact_ref",
         base=Decimal("1.00"),
         fields_agreed=1,
         fields_disagreed=0,
@@ -117,6 +118,7 @@ def test_confidence_is_always_a_four_place_decimal_in_the_unit_interval(
 ) -> None:
     result = derive(
         ConfidenceInputs(
+            stage="exact_ref",
             base=Decimal(base),
             fields_agreed=agreed,
             fields_disagreed=disagreed,

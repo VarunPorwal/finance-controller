@@ -40,6 +40,12 @@ _ZERO = Decimal(0)
 class ConfidenceInputs:
     """Everything §6.6 needs, gathered by a stage and handed here."""
 
+    #: Needed because the §6.3 per-stage ceiling is applied *inside* :func:`derive`.
+    #: Capping afterwards let ``ConfidenceDerivation.result`` disagree with the
+    #: confidence actually stored - a fuzzy match would render arithmetic ending
+    #: in 0.7875 beside a stated 0.75, which is the exact failure this module
+    #: exists to prevent.
+    stage: MatchStage
     base: Decimal
     fields_agreed: int
     fields_disagreed: int
@@ -55,8 +61,10 @@ class DerivationOutcome:
     """The derivation, plus whether the three-way bonus actually moved anything.
 
     A bonus of 1.05 applied to a product that already clamps at 1.0 changes
-    nothing. ``bonus_was_load_bearing`` lets the eval report say how many
-    matches the bonus really affected instead of leaving it in as decoration.
+    nothing, and neither does one applied to a fuzzy score the 0.75 cap then
+    erases. ``bonus_was_load_bearing`` compares the two **post-cap** confidences,
+    so it reports what the bonus did to the number that is actually stored rather
+    than to an intermediate nobody sees.
     """
 
     derivation: ConfidenceDerivation
@@ -72,7 +80,8 @@ def derive(inputs: ConfidenceInputs) -> DerivationOutcome:
     bonus = THREE_WAY_BONUS if inputs.distinct_sources >= 3 else _ONE
 
     without_bonus = inputs.base * agreement * (_ONE - delta_ratio) * date_penalty * ambiguity
-    result = _quantize(_clamp(without_bonus * bonus))
+    result = cap_for_stage(inputs.stage, _quantize(_clamp(without_bonus * bonus)))
+    bare = cap_for_stage(inputs.stage, _quantize(_clamp(without_bonus)))
 
     return DerivationOutcome(
         derivation=ConfidenceDerivation(
@@ -84,7 +93,7 @@ def derive(inputs: ConfidenceInputs) -> DerivationOutcome:
             source_coverage_bonus=_quantize(bonus),
             result=result,
         ),
-        bonus_was_load_bearing=bonus != _ONE and result != _quantize(_clamp(without_bonus)),
+        bonus_was_load_bearing=bonus != _ONE and result != bare,
     )
 
 

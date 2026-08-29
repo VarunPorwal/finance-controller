@@ -24,7 +24,7 @@ from decimal import Decimal
 
 from fc.config import Config
 from fc.matching.blocking import BlockIndex, PrefixIndex, candidate_pairs, reference_values
-from fc.matching.stages import StageMatch, StageOutput
+from fc.matching.stages import StageMatch, StageOutput, StageRefusal
 from fc.matching.tolerance import tolerance_terms
 from fc.models.transaction import TransactionEvent
 
@@ -56,7 +56,7 @@ def find_matches(
     prefixes = PrefixIndex(value for event in events for value in reference_values(event))
 
     matches: list[StageMatch] = []
-    abstained: list[str] = []
+    refusals: list[StageRefusal] = []
     ambiguous_fragments = 0
 
     for left_id, right_id in candidate_pairs(index, by_id):
@@ -74,7 +74,17 @@ def find_matches(
         if agreement is None:
             if _shares_a_fragment(left, right):
                 ambiguous_fragments += 1
-                abstained.append(left_id)
+                refusals.append(
+                    StageRefusal(
+                        category="ambiguous_multi_candidate",
+                        event_ids=(left_id,),
+                        amount_paise=left.amount_paise,
+                        reason=(
+                            "a reference fragment is shared but completes to more than one "
+                            "reference, so it identifies none of them"
+                        ),
+                    )
+                )
             continue
 
         matches.append(
@@ -99,7 +109,7 @@ def find_matches(
 
     return StageOutput(
         matches=tuple(matches),
-        abstained=tuple(sorted(set(abstained))),
+        refusals=tuple(refusals),
         diagnostics={"ambiguous_reference_fragments": ambiguous_fragments},
     )
 

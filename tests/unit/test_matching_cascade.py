@@ -15,6 +15,7 @@ from hypothesis import strategies as st
 from fc.config import Config, load_config
 from fc.matching.cascade import CASCADE_ORDER, run_cascade
 from fc.models.ids import deterministic_factory
+from fc.models.match import stage_may_auto_close
 from fc.models.transaction import Direction, Source, TransactionEvent
 
 _AT = datetime(2026, 8, 1, tzinfo=UTC)
@@ -113,7 +114,13 @@ def _settlement() -> list[TransactionEvent]:
 
 
 def test_the_stage_order_is_the_prd_order() -> None:
-    assert CASCADE_ORDER == ("exact_ref", "fee_adjusted", "date_shift")
+    assert CASCADE_ORDER == (
+        "exact_ref",
+        "fee_adjusted",
+        "date_shift",
+        "many_to_one",
+        "fuzzy",
+    )
 
 
 def test_no_event_appears_in_two_match_groups() -> None:
@@ -224,3 +231,35 @@ def test_invariants_hold_on_arbitrary_input(amounts: list[int], shifts: list[int
     for match in result.matches:
         assert 0 <= match.confidence <= 1
         assert match.evidence
+
+
+def test_the_same_seed_produces_the_same_refusals_and_search_costs() -> None:
+    """Hard rule 9 over the abstentions, not just the matches.
+
+    An engine whose *exceptions* vary between runs cannot be audited, and the
+    subset-sum step counts are included because a work budget that drifted would
+    silently change which settlements abstain.
+    """
+    events = _settlement()
+    first, second = _run(events), _run(events)
+
+    assert [(r.category, r.event_ids, r.reason) for r in first.refusals] == [
+        (r.category, r.event_ids, r.reason) for r in second.refusals
+    ]
+    search = lambda r: {k: v for k, v in r.diagnostics.items() if "subset_sum" in k}  # noqa: E731
+    assert search(first) == search(second)
+
+
+def test_no_auto_closed_group_carries_a_leg_that_may_not_auto_close() -> None:
+    """The permanent gate for the weakest-leg rule.
+
+    Checked over the evidence rather than ``MatchResult.stage``: a group formed
+    by stage 1 and extended by stage 5 still reports ``stage="exact_ref"``, so
+    the PRD §12.3 formulation (filtering ``m.stage == "fuzzy"``) cannot see the
+    case it is meant to catch.
+    """
+    for match in _run(_settlement()).matches:
+        if not match.auto_closed:
+            continue
+        for leg in match.evidence:
+            assert stage_may_auto_close(leg.stage, grouped_by=leg.grouped_by)

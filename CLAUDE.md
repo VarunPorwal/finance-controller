@@ -43,7 +43,8 @@ change the other.
 | `make web` | `.\scripts\dev.ps1 web` | next dev |
 | `make demo` | `.\scripts\dev.ps1 demo` | seed + full reconciliation |
 | `make demo-local` | `.\scripts\dev.ps1 demo-local` | same, local Postgres, LLM_MODE=cache_only, no network |
-| `make eval` | `.\scripts\dev.ps1 eval` | accuracy suite, prints the metrics table |
+| `make check` | `.\scripts\dev.ps1 check` | lint + typecheck + test + eval. **Run this before every commit.** |
+| `make eval` | `.\scripts\dev.ps1 eval` | accuracy suite; **exits non-zero when a §12.5 gate fails** |
 | `make migrate` | `.\scripts\dev.ps1 migrate` | alembic upgrade head |
 | `make generate` | `.\scripts\dev.ps1 generate -Seed 42 -N 500` | synthetic corpus |
 | `make test` | `.\scripts\dev.ps1 test` | pytest |
@@ -51,9 +52,15 @@ change the other.
 | `make typecheck` | `.\scripts\dev.ps1 typecheck` | mypy --strict engine/src |
 | `make client` | `.\scripts\dev.ps1 client` | regenerate web/lib/api.ts |
 
-Run `.\scripts\dev.ps1 test` and `.\scripts\dev.ps1 typecheck` before reporting
-a task complete. For anything touching matching, rules or tiering, also run
-`.\scripts\dev.ps1 eval`.
+Run `.\scripts\dev.ps1 check` before reporting a task complete. It is lint +
+typecheck + test + eval, and it fails the build on any §12.5 gate.
+
+`test` deliberately excludes the eval suite (`addopts = -m 'not eval'`) because
+it needs the generated corpus and is slow. That exclusion meant
+`false_auto_resolutions == 0` — the merge blocker this submission rests on — ran
+only when somebody typed `pytest -m eval` by hand, and `make eval` printed the
+number without ever comparing it to anything. Both are fixed; `check` is the
+target that enforces them.
 
 ## Conventions
 
@@ -92,11 +99,28 @@ a task complete. For anything touching matching, rules or tiering, also run
 - **`fc/eval/report.py` was created early in Prompt 4 as a partial** so
   `dev.ps1 eval` would run. Prompt 10 must replace it with the full harness per
   PRD §12.4, not extend the stub.
-- **`source_coverage_bonus` (1.05, three-way) moved 0 matches as of Prompt 4** —
-  three-way exact matches already clamp at 1.0, so multiplying by 1.05 changes
-  nothing. It should start firing once stage 5's 0.75 cap lands (three-way fuzzy
-  reaches 0.7875). If `make eval` still reports 0 after Prompt 5, remove it
-  rather than leaving decoration in the confidence formula.
+- **`false_auto_resolutions` does not measure the `NEVER_AUTO` rule.** It is
+  scored pairwise, and ground truth files a duplicate voucher under the same
+  `gt_match_group` as the settlement it duplicates — so pairwise it is a correct
+  pair while as a decision it is a wrong auto-close. Read
+  `never_auto_inside_auto_closed` for that. It stands at **14** (4
+  `chargeback_unrecorded`, 10 `ambiguous_multi_candidate`) and needs
+  `fc/exceptions/classify.py`; three-way already closed the 3
+  `duplicate_ledger_entry` cases it can prove.
+- **Stage 4's subset-sum DP has zero corpus cases.** Every scenario-3 batch is
+  claimed by stage 1 first via the shared UTR, and the 41-row batch is over
+  `max_subset_n`. The DP is unit-tested only, and
+  `many_to_one.subset_sum_invocations` is expected to read 0 — treat a non-zero
+  value as new information, not as the stage finally working.
+- **Group-level properties (`auto_closed`, confidence cap) must be computed
+  across all legs. Never read `host.stage` for anything that describes the
+  group. A group is only as provable as its weakest leg.** `MatchResult.stage`
+  is the *forming* stage and stays that way — it is a label, not the rule, and
+  treating it as the rule has produced this bug twice: once in `auto_closed` and
+  once in the confidence cap, in adjacent lines. Both are now enforced by
+  `MatchResult` validation via `group_confidence_cap` and `stage_may_auto_close`,
+  and asserted over the corpus in `eval`, because the pairwise metric cannot see
+  either — ground truth scores such a group as correctly matched.
 - **`order_id` identifies an order, not a money movement.** A payment, its
   partial refund and its chargeback all quote the same order id and settle in
   different batches. `fc/matching/stages/exact_ref.py` splits order-scoped join

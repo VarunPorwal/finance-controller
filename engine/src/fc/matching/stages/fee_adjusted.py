@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from fc.config import Config
-from fc.matching.stages import StageMatch, StageOutput, trusted_bank_reference
+from fc.matching.stages import StageMatch, StageOutput, StageRefusal, trusted_bank_reference
 from fc.matching.tolerance import tolerance_terms
 from fc.models.money import fmt_inr
 from fc.models.transaction import TransactionEvent
@@ -172,7 +172,7 @@ def find_matches(
     )
 
     matches: list[StageMatch] = []
-    abstained: list[str] = []
+    refusals: list[StageRefusal] = []
     bindings: dict[str, int] = {}
     contradicted = 0
     for credit in credits:
@@ -198,7 +198,18 @@ def find_matches(
         if not reconciling:
             continue
         if len(reconciling) > 1:
-            abstained.append(credit.event_id)
+            refusals.append(
+                StageRefusal(
+                    category="ambiguous_multi_candidate",
+                    event_ids=(credit.event_id,),
+                    amount_paise=credit.amount_paise,
+                    reason=(
+                        f"{len(reconciling)} settlements reconcile to this credit within "
+                        f"tolerance ({', '.join(sid for sid, _, _ in reconciling)}); "
+                        "choosing one would be a guess"
+                    ),
+                )
+            )
             continue
 
         sid, delta, tolerance = reconciling[0]
@@ -226,7 +237,7 @@ def find_matches(
     diagnostics["settlements_considered"] = len(arithmetic)
     diagnostics["settlements_refused_on_contradicting_reference"] = contradicted
     diagnostics["bank_credits_considered"] = len(credits)
-    return StageOutput(matches=tuple(matches), abstained=tuple(abstained), diagnostics=diagnostics)
+    return StageOutput(matches=tuple(matches), refusals=tuple(refusals), diagnostics=diagnostics)
 
 
 def _label(event: TransactionEvent) -> str:
