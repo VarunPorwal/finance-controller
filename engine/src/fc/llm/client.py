@@ -59,6 +59,7 @@ __all__ = [
     "TIERS",
     "AuthError",
     "CallLedger",
+    "ConfigError",
     "LLMClient",
     "LLMError",
     "ModelHealth",
@@ -135,13 +136,16 @@ TIERS: dict[str, tuple[ModelSpec, ...]] = {
         ModelSpec("gemini", "gemini-3.7-flash", "high", rpm_limit=15, rpd_limit=1000),
     ),
     "fallback": (
+        # Verified against this account's /models on 29 Aug 2026. The PRD named
+        # llama-3.3-70b-versatile, which this account cannot reach at all —
+        # Groq's catalogue here carries no Llama chat model, only the two
+        # prompt-guard classifiers. Both gpt-oss models answered a strict
+        # json_schema request in under a second.
         ModelSpec(
-            "groq",
-            "llama-3.3-70b-versatile",
-            "none",
-            multimodal=False,
-            rpm_limit=30,
-            rpd_limit=1000,
+            "groq", "openai/gpt-oss-120b", "none", multimodal=False, rpm_limit=30, rpd_limit=1000
+        ),
+        ModelSpec(
+            "groq", "openai/gpt-oss-20b", "none", multimodal=False, rpm_limit=30, rpd_limit=1000
         ),
     ),
 }
@@ -197,6 +201,23 @@ class SafetyBlocked(LLMError):
 
 class AuthError(LLMError):
     pass
+
+
+class ConfigError(LLMError):
+    """A model that does not exist, or that this account cannot reach.
+
+    Classified apart from :class:`SchemaInvalid` because the two want opposite
+    treatment. A schema failure rotates *without* tripping, on the reasoning
+    that the model is fine and this particular request was not — which is right
+    for a 400, and exactly wrong for a 404: the endpoint is dead, and rotating
+    without tripping means every later call pays full latency to rediscover
+    that. Handled like :class:`AuthError` instead — tripped for the session and
+    logged loudly, because no cooldown fixes a wrong model id.
+
+    Found the hard way: the fallback tier shipped naming a Groq model this
+    account has no access to, and the resulting 404 was reported as a schema
+    failure, which is a quieter and much more misleading thing for it to say.
+    """
 
 
 class SchemaInvalid(LLMError):
@@ -746,6 +767,17 @@ class LLMClient:
             health.trip_for_session()
             _LOG.error(
                 "auth failure for %s — tripped for this process. Check the API key.", spec.key
+            )
+            self._log_failure(spec, tier, purpose, prompt_hash, tenant_id, run_id, "down")
+            return None
+        except ConfigError as exc:
+            health.trip_for_session()
+            _LOG.error(
+                "%s is not reachable on this account (%s) — tripped for this process. "
+                "The model id in TIERS is wrong or the account lacks access; no amount of "
+                "retrying will fix it.",
+                spec.key,
+                exc,
             )
             self._log_failure(spec, tier, purpose, prompt_hash, tenant_id, run_id, "down")
             return None

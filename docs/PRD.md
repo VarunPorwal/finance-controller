@@ -2324,7 +2324,9 @@ TIERS = {
         ModelSpec("gemini", "gemini-3.7-flash", thinking="high", ...),
     ],
     "fallback": [
-        ModelSpec("groq", "llama-3.3-70b-versatile", structured=True,
+        ModelSpec("groq", "openai/gpt-oss-120b", structured=True,
+                  functions=True, multimodal=False),
+        ModelSpec("groq", "openai/gpt-oss-20b", structured=True,
                   functions=True, multimodal=False),
     ],
 }
@@ -2340,6 +2342,37 @@ TASK_ROUTE = {
     "embedding":      ["EMBED:gemini-embedding-001", "TERMINAL:string_normalise"],
 }
 ```
+
+### Model ids, verified 29 Aug 2026
+
+Every id above was checked against the live `ListModels` endpoint on both
+providers and confirmed with a real structured-output call. This is worth
+recording because the ids in this document were originally written from
+documentation rather than from the API, and one of them was wrong.
+
+**Gemini — all five ids verified correct.** `gemini-3.5-flash-lite`,
+`gemini-3.1-flash-lite`, `gemini-3.6-flash` and `gemini-3.5-flash` each
+returned schema-conformant JSON and a well-formed function call.
+`gemini-3.7-flash` exists and is a valid id, but currently answers 503
+`UNAVAILABLE` ("experiencing high demand") on every attempt — a transient
+server condition, which the router already classifies as such and trips only
+after three consecutive failures. It is kept in the standard and deep tiers on
+that basis. The `gemini-2.5-*` generation now returns 404 "no longer available
+to new users", and every Pro, image and video model returns 429 quota-exceeded,
+which is consistent with this document's existing position that Pro is not free.
+
+**Groq — the original id was wrong.** `llama-3.3-70b-versatile` returns 404
+`model_not_found`; this account's catalogue carries no Llama chat model at all,
+only the two `llama-prompt-guard-2` classifiers. The fallback tier is now
+`openai/gpt-oss-120b` and `openai/gpt-oss-20b`, both of which answered a strict
+`json_schema` request in under a second. `groq/compound` and `compound-mini`
+are agentic routers with different semantics and are deliberately not used.
+
+The failure this produced is worth keeping in mind: a wrong model id is a 404,
+and a 404 was originally classified as a schema failure — which rotates without
+tripping, so every subsequent call paid full latency to rediscover the same
+dead endpoint while the log blamed the schema. §7.2's failure table now carries
+a separate row for it.
 
 **Every route terminates in a non-LLM outcome.** That is what makes degradation honest rather than a failure.
 
@@ -2425,6 +2458,7 @@ The **headroom margins are the important part.** Hitting a 429 and *then* failin
 | Schema validation failure | **Rotate immediately, do not retry same model** | Retrying will not fix it |
 | Safety block | Rotate; log for review | Prompt issue, not quota |
 | Auth error | Trip permanently for the session, alert | Configuration |
+| 404 `model_not_found` | Trip permanently for the session, alert | Configuration — the id is wrong or the account lacks access, and no cooldown fixes either. Distinct from a schema failure precisely because that one rotates *without* tripping |
 
 ### The call path
 
@@ -3741,7 +3775,9 @@ LOG_LEVEL=INFO
 | Google AI Studio | Flash | ✓ rate-limited | ✓ | ✓ | ✓ | ✓ | Primary |
 | Google AI Studio | Flash-Lite | ✓ rate-limited | ✓ | ✓ | ✓ | ✓ | Light-tier primary |
 | Google AI Studio | Pro | ✗ paid since Apr 2026 | ✓ | ✓ | ✓ | ✓ | Not used; nothing needs it |
-| Groq | Llama 3.3 70B | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback (text tasks only) |
+| Groq | `openai/gpt-oss-120b` | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback primary (text only) |
+| Groq | `openai/gpt-oss-20b` | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback second (text only) |
+| Groq | ~~Llama 3.3 70B~~ | — | — | — | — | — | **Not available on this account.** `llama-3.3-70b-versatile` returns 404 `model_not_found`; the catalogue carries no Llama chat model |
 | Vertex AI | Same Gemini lineup | ✗ (credits) | ✓ | ✓ | ✓ | ✓ | Phase 2, for data residency and no-training guarantee |
 
 **Engine runtime dependencies are five, and that list is an enforcement
@@ -3877,7 +3913,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 | 3 | Time allotted per team for the demo? Script is 8 min and can compress to 5 | Yathu | 4 Sept |
 | 4 | Is a hosted URL required at submission, or is local acceptable? | Yathu | 3 Sept |
 | 5 | Should the corpus model a specific merchant vertical (D2C vs marketplace)? | Team | 28 Aug |
-| 6 | Confirm free-tier RPM/RPD per model in AI Studio for router configuration | Team | 2 Sept |
+| 6 | ~~Confirm free-tier RPM/RPD per model in AI Studio for router configuration~~ **Partly closed, 29 Aug 2026.** Model *ids* are now verified against both providers' live `/models` endpoints (§7.2). The RPM/RPD figures are **not** exposed by either API — `ListModels` returns token limits only, and Groq's returns context windows — so the numbers in `TIERS` remain the published documentation figures. That is tolerable because they are the input to a headroom margin rather than a limit relied on: the router fails over at 85% of RPM and 90% of RPD, so a figure that is slightly optimistic costs a rotation, not a visible 429. Revisit only if 429s start appearing in `llm_calls`. | Team | closed |
 | 7 | Does any judging criterion reward code quality directly, or only the demo? | Yathu | 3 Sept |
 
 ---
@@ -3886,6 +3922,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 
 | Version | Date | Change |
 |---|---|---|
+| 3.4 | 29 Aug 2026 | **Model ids verified against the live APIs.** The ids in §7.2 and Appendix C were written from documentation and none had ever been called; a probe of the Groq fallback path found `llama-3.3-70b-versatile` returns 404 `model_not_found` — this account's Groq catalogue has no Llama chat model. The fallback tier is now `openai/gpt-oss-120b` and `openai/gpt-oss-20b`, both confirmed against a strict `json_schema` request. All five Gemini ids verified correct; `gemini-3.7-flash` is valid but currently 503 `UNAVAILABLE` under load, which the router already treats as transient. §7.2 gains a "Model ids, verified" subsection and a failure-table row: a 404 is a **configuration** error that trips the model for the session, not a schema failure that rotates without tripping — the original classification meant every later call paid full latency to rediscover a dead endpoint while the log blamed the schema. Appendix H question 6 partly closed: ids confirmed, RPM/RPD not exposed by either API and left as the published figures, which is safe because they feed a headroom margin rather than a hard limit. |
 | 3.3 | 29 Aug 2026 | **AI layer built.** §7.8: the text-to-SQL mechanism is now the RLS-scoped session plus a read-only transaction, not a dedicated read-only role — on Neon that role carries `rolbypassrls`, so the original design would have traded RLS away for a guarantee the transaction already gives, leaving one real layer where the text claimed three; `DATABASE_URL_READONLY` is optional hardening and `/agent/health` reports which layers are active. §7.3: the single-instance caveat now covers the parsed-command store as well as the health tracker (same cause, same fix, same release), and `health_scope: "process"` surfaces it in the API. Appendix A: `httpx` and `sqlglot` added as engine runtime dependencies, with the reasoning for hand-written REST adapters over the provider SDKs — the router's design turns on distinguishing HTTP failure modes that an SDK abstracts away. Appendix B: `LLM_CACHE_DIR` defaults to `./.llm-cache` (the POSIX default resolved to a Windows temp path on the build machine and disagreed with both `.env` files); `DATABASE_URL_READONLY` re-described. §3.7: added `fc/llm/injection.py`, `fc/llm/generate.py`, the `fc/agent/` package, `api/routers/agent.py` and `api/generation.py`. Generator: **scenario 19** seeds prompt-injection text into two real bank narrations so §10.3's detection is exercised against the corpus rather than a fixture. |
 | 1.0 | 27 Aug 2026 | Initial PRD |
 | 2.0 | 27 Aug 2026 | Added full architecture, schemas, API surface, Gemini spec, D6/D7 |

@@ -25,6 +25,7 @@ import pytest
 
 from fc.llm.client import (
     AuthError,
+    ConfigError,
     RateLimited,
     SafetyBlocked,
     SchemaInvalid,
@@ -101,6 +102,25 @@ def test_a_408_becomes_a_timeout() -> None:
 def test_a_400_becomes_a_schema_failure_so_the_router_rotates_rather_than_retries() -> None:
     with pytest.raises(SchemaInvalid):
         _classify(_response(400, body="Invalid JSON payload received"))
+
+
+def test_a_404_model_not_found_is_a_config_error_not_a_schema_failure() -> None:
+    """A dead model id and a rejected schema want opposite treatment.
+
+    Regression test for a real one: the fallback tier shipped naming a Groq
+    model this account cannot reach, and the 404 was classified as
+    ``schema_fail`` — which rotates without tripping, so every later call paid
+    full latency to rediscover the same dead endpoint, and the log said
+    "schema failure" about a configuration mistake.
+    """
+    body = (
+        '{"error":{"message":"The model `llama-3.3-70b-versatile` does not exist or you '
+        'do not have access to it.","code":"model_not_found"}}'
+    )
+    with pytest.raises(ConfigError) as caught:
+        _classify(_response(404, body=body))
+    assert "model_not_found" in str(caught.value)
+    assert not isinstance(caught.value, SchemaInvalid)
 
 
 def test_a_2xx_classifies_as_nothing() -> None:

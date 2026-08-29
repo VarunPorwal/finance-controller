@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from fc.config import Config
 from fc.llm.client import (
     AuthError,
+    ConfigError,
     RateLimited,
     RawResponse,
     SafetyBlocked,
@@ -255,6 +256,11 @@ def _classify(response: httpx.Response) -> None:
         raise RateLimited(response.text[:200], retry_after=_retry_after(response))
     if status in (401, 403):
         raise AuthError(f"{status}: {response.text[:200]}")
+    if status == 404:
+        # A model id that does not exist, or that this account cannot reach.
+        # Permanent until somebody edits TIERS, so it trips for the session
+        # rather than rotating — see ConfigError.
+        raise ConfigError(f"{status}: {response.text[:300]}")
     if status >= 500:
         raise ServerError(f"{status}: {response.text[:200]}")
     if status == 408:

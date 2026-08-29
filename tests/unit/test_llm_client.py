@@ -23,6 +23,7 @@ from fc.llm.client import (
     TERMINALS,
     TIERS,
     AuthError,
+    ConfigError,
     LLMClient,
     ModelHealth,
     RateLimited,
@@ -256,6 +257,25 @@ async def test_an_auth_error_trips_the_model_for_the_whole_session(tmp_path: Pat
     await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
     clock.advance(10_000)
     assert not client.health[first.key].available()
+
+
+@pytest.mark.anyio
+async def test_a_config_error_trips_the_model_for_the_session_like_an_auth_error(
+    tmp_path: Path,
+) -> None:
+    """A 404 is permanent until somebody edits TIERS. Rotating without tripping
+    would make every later call re-discover the same dead endpoint."""
+    clock = FakeClock()
+    first = TIERS["light"][0]
+    client, provider = _client(
+        tmp_path, script={first.key: ConfigError("404: model_not_found")}, clock=clock
+    )
+    await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
+    clock.advance(10_000)
+    assert not client.health[first.key].available(), "a dead model id recovered on its own"
+    # And it rotated rather than failing the call.
+    assert provider.calls[0] == first.key
+    assert len(provider.calls) == 2
 
 
 def test_a_half_open_probe_that_fails_doubles_the_cooldown_capped_at_ten_minutes() -> None:
