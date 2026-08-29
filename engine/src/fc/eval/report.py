@@ -19,7 +19,14 @@ scored **pairwise**, and ground truth puts a duplicate voucher in the same
 pair, while as a *decision* it is a wrong auto-close. The metric is therefore
 structurally blind to the ``NEVER_AUTO`` rule, and reading it as proof of that
 rule is reading it as something it does not measure.
-``never_auto_inside_auto_closed`` is the counter that does measure it.
+``never_auto_inside_auto_closed`` is the counter that does measure it — but it
+stops at the cascade, so it reads nonzero for a settlement the pipeline
+correctly leaves auto-closed while still raising a smaller, separate,
+correctly-tiered exception over the part of it that is genuinely unresolved
+(``fc.exceptions.classify``'s order-attribution finding is the real example).
+``never_auto_after_pipeline`` is the one that is actually gated: it runs the
+full exception pipeline, not just the cascade, and asks the question that
+matters — does *some* exception escalate this event, wherever it ended up.
 
 Scoring is **pairwise**. A predicted group of n events asserts C(n,2) "these two
 are the same money" claims; a claim is correct when both events carry the same
@@ -30,48 +37,28 @@ which set-equality scoring cannot express.
 
 from __future__ import annotations
 
-import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 from decimal import Decimal
 from itertools import combinations
-from pathlib import Path
 
 from fc.config import Config, load_config
-from fc.ingest.bank_csv import parse_bank_csv
-from fc.ingest.narration.hdfc import HdfcNarrationParser
-from fc.ingest.razorpay import parse_razorpay_recon
-from fc.ingest.tally import parse_tally_csv
+from fc.eval.corpus import DATA_DIR, EPOCH_MS, INGESTED_AT, RUN_ID, TENANT_ID, Corpus, load_corpus
 from fc.matching.cascade import CascadeResult, run_cascade
 from fc.matching.stages.exact_ref import reference_is_truncated
 from fc.models.exception_ import NEVER_AUTO
 from fc.models.ids import deterministic_factory
-from fc.models.transaction import TransactionEvent
+from fc.models.rule import Rule
+from fc.pipeline import run_pipeline
+from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
 
-__all__ = ["EvalReport", "evaluate", "load_corpus", "main"]
+__all__ = ["Corpus", "EvalReport", "evaluate", "load_corpus", "main"]
 
-DATA_DIR = Path(__file__).resolve().parents[4] / "data" / "generated"
-
-#: Fixed so the suite is a pure function of the corpus (hard rule 9).
-_EPOCH_MS = 1_780_000_000_000
-_INGESTED_AT = datetime(2026, 8, 29, tzinfo=UTC)
-_OPENING_BALANCE_PAISE = 1_000_000_00
-_RUN_ID = "run_eval"
-_TENANT_ID = "t_lumea"
-
-
-@dataclass(frozen=True)
-class Corpus:
-    events: tuple[TransactionEvent, ...]
-    #: (source, source_row_id) -> gt_match_group
-    truth: Mapping[tuple[str, str], str | None]
-    #: (source, source_row_id) -> bucket
-    bucket: Mapping[tuple[str, str], str]
-    rejections: int
-    #: (source, source_row_id) -> gt_label, for the NEVER_AUTO gate below.
-    label: Mapping[tuple[str, str], str | None] = field(default_factory=dict)
+_EPOCH_MS = EPOCH_MS
+_INGESTED_AT = INGESTED_AT
+_RUN_ID = RUN_ID
+_TENANT_ID = TENANT_ID
 
 
 @dataclass(frozen=True)
@@ -89,59 +76,31 @@ class EvalReport:
     #: Events ground truth labels NEVER_AUTO that are sitting inside an
     #: auto-closed match. ``false_auto_resolutions`` cannot see these.
     never_auto_inside_auto_closed: int
+    #: The metric that actually closes the gap: events ground truth labels
+    #: NEVER_AUTO that the *finished exception pipeline* (not just the
+    #: cascade) fails to escalate. Zero does not mean the cascade never
+    #: auto-closes a group containing one of these — it means
+    #: ``fc.exceptions.classify`` always raises a separate, correctly-tiered
+    #: exception over it regardless, so a human sees it either way.
+    never_auto_after_pipeline: int
     refusals: Mapping[str, int]
     ledger_without_reference: int
     ledger_unmatched_with_reference: int
     truncated_references_withheld: int
 
 
-def load_corpus(data_dir: Path = DATA_DIR) -> Corpus:
-    """Ingest the generated files through the production adapters."""
-    issue_id = deterministic_factory(seed=42, epoch_ms=_EPOCH_MS)
+def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None) -> EvalReport:
+    """Run the cascade and score it against ground truth.
 
-    razorpay = parse_razorpay_recon(
-        json.loads((data_dir / "razorpay_recon.json").read_text(encoding="utf-8")),
-        run_id=_RUN_ID,
-        tenant_id=_TENANT_ID,
-        issue_id=issue_id,
-        ingested_at=_INGESTED_AT,
+    ``rules`` defaults to the shipped starter pack (``data/rules/deductions.yaml``)
+    so existing callers that only ever passed ``(corpus, cfg)`` keep working
+    unchanged; pass an explicit ruleset to score against a different one.
+    """
+    pipeline_rules = (
+        rules
+        if rules is not None
+        else load_rules(DEFAULT_RULES_PATH, tenant_id=_TENANT_ID, created_at=_INGESTED_AT).rules
     )
-    bank = parse_bank_csv(
-        (data_dir / "bank_statement.csv").read_text(encoding="utf-8"),
-        run_id=_RUN_ID,
-        tenant_id=_TENANT_ID,
-        narration_parser=HdfcNarrationParser(),
-        opening_balance_paise=_OPENING_BALANCE_PAISE,
-        issue_id=issue_id,
-        ingested_at=_INGESTED_AT,
-    )
-    ledger = parse_tally_csv(
-        (data_dir / "tally_daybook.csv").read_text(encoding="utf-8"),
-        run_id=_RUN_ID,
-        tenant_id=_TENANT_ID,
-        issue_id=issue_id,
-        ingested_at=_INGESTED_AT,
-    )
-
-    truth: dict[tuple[str, str], str | None] = {}
-    bucket: dict[tuple[str, str], str] = {}
-    label: dict[tuple[str, str], str | None] = {}
-    for line in (data_dir / "ground_truth.jsonl").read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        entry = json.loads(line)
-        key = (entry["source"], entry["key"])
-        truth[key] = entry["gt_match_group"]
-        bucket[key] = entry["bucket"]
-        label[key] = entry.get("gt_label")
-
-    events = (*razorpay.events, *bank.ingest.events, *ledger.events)
-    rejections = len(razorpay.rejections) + len(bank.ingest.rejections) + len(ledger.rejections)
-    return Corpus(events=events, truth=truth, bucket=bucket, rejections=rejections, label=label)
-
-
-def evaluate(corpus: Corpus, cfg: Config) -> EvalReport:
-    """Run the cascade and score it against ground truth."""
     issue_id = deterministic_factory(seed=7, epoch_ms=_EPOCH_MS)
     result = run_cascade(
         corpus.events,
@@ -202,6 +161,7 @@ def evaluate(corpus: Corpus, cfg: Config) -> EvalReport:
         match_rate=_ratio(matched_events, len(corpus.events)),
         false_auto_resolutions=_false_auto_resolutions(result, group_of),
         never_auto_inside_auto_closed=_never_auto_inside_auto_closed(corpus, result),
+        never_auto_after_pipeline=_never_auto_after_pipeline(corpus, cfg, pipeline_rules),
         refusals={category: count for category, count in sorted(result.refusal_counts.items())},
         ledger_without_reference=len(ledger_barren),
         ledger_unmatched_with_reference=len((unmatched & ledger_ids) - ledger_barren),
@@ -258,6 +218,43 @@ def _never_auto_inside_auto_closed(corpus: Corpus, result: CascadeResult) -> int
             continue
         offenders += sum(1 for e in match.event_ids if label_of.get(e) in NEVER_AUTO)
     return offenders
+
+
+def _never_auto_after_pipeline(corpus: Corpus, cfg: Config, rules: Sequence[Rule]) -> int:
+    """The direct measurement: does the *finished pipeline* escalate every
+    NEVER_AUTO-labelled event, not just avoid closing it silently?
+
+    ``never_auto_inside_auto_closed`` counts a real gap but does not name the
+    fix, and reads nonzero forever for a settlement whose cash is correctly
+    auto-closed while a smaller, separate finding (order-level attribution)
+    is what's actually unresolved (CLAUDE.md carry-forward). This metric asks
+    the question that actually matters: whichever match an event ends up in,
+    does some exception in the human queue name it with ``tier='escalate'``?
+    """
+    issue_id = deterministic_factory(seed=7, epoch_ms=_EPOCH_MS)
+    result = run_pipeline(
+        corpus.events,
+        cfg=cfg,
+        rules=rules,
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        issue_id=issue_id,
+        created_at=_INGESTED_AT,
+    )
+    escalated: set[str] = set()
+    for exc in result.exceptions:
+        if exc.tier == "escalate":
+            escalated.update(exc.event_ids)
+
+    label_of = {
+        event.event_id: corpus.label.get((event.source, event.source_row_id))
+        for event in corpus.events
+    }
+    return sum(
+        1
+        for event in corpus.events
+        if label_of.get(event.event_id) in NEVER_AUTO and event.event_id not in escalated
+    )
 
 
 def _ratio(numerator: int, denominator: int) -> Decimal:
@@ -320,7 +317,11 @@ def render(report: EvalReport) -> str:
     row("false_auto_resolutions", report.false_auto_resolutions)
     row(
         "never_auto events inside auto-closed matches",
-        f"{report.never_auto_inside_auto_closed}   <- the gate above cannot see these",
+        f"{report.never_auto_inside_auto_closed}   <- false_auto_resolutions cannot see these",
+    )
+    row(
+        "never_auto events NOT escalated by the finished pipeline",
+        f"{report.never_auto_after_pipeline}   <- the gate below measures this one directly",
     )
 
     lines.append("")
@@ -383,6 +384,12 @@ def check_gates(report: EvalReport, cfg: Config) -> tuple[GateResult, ...]:
             "false_auto_resolutions",
             report.false_auto_resolutions == 0,
             str(report.false_auto_resolutions),
+            "0",
+        ),
+        GateResult(
+            "never_auto_after_pipeline",
+            report.never_auto_after_pipeline == 0,
+            str(report.never_auto_after_pipeline),
             "0",
         ),
         GateResult(

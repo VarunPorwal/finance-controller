@@ -26,17 +26,34 @@
 # Rules are immutable per version. To change a rate, add a version N+1 entry
 # with its own date window; do not edit one of these in place (§4.3.6 enforces
 # it in the database, and this file is the thing that database mirrors).
+#
+# --- razorpay_mdr_* version history -----------------------------------------
+#
+# Version 1 of each `razorpay_mdr_*` rule below bundled a `tds_194o` line into
+# a *per-transaction* stack. That is wrong: Razorpay deducts TDS 194-O once
+# per settlement batch (a `setlod_` adjustment row, PRD §4.1.7), never per
+# payment, so applying version 1 to a single row's fee would compute a
+# spurious ~1%-of-gross TDS residual on every own-store transaction there is.
+# It was caught before anything in `fc.pipeline` ever applied these rules
+# per-transaction, so version 1's window is retired one day before the
+# earliest transaction in the reference corpus (2026-06-05) — it never
+# touched real data. Version 2 carries the same MDR/GST rates with the TDS
+# line removed; the batch-level TDS 194-O check now lives in its own rule,
+# `razorpay_tds_batch` below, which verifies it once per settlement instead
+# of once per row.
 
 - id: razorpay_mdr_card
   version: 1
   name: Razorpay MDR — card
   description: >-
     2% MDR on card payments, 18% GST on that MDR, 1% TDS under section 194-O on
-    the gross. PRD §4.1.7.
+    the gross. PRD §4.1.7. Retired: TDS is batch-level, not per-transaction —
+    see razorpay_mdr_card v2.
   scope:
     source: razorpay
     method: card
     date_from: 2026-04-01
+    date_to: 2026-06-04
   deductions:
     - type: mdr
       basis: gross
@@ -54,15 +71,45 @@
   effective_confidence: 0.95
   origin: manual
   created_by: system:starter_pack
+  status: retired
+
+- id: razorpay_mdr_card
+  version: 2
+  name: Razorpay MDR — card
+  description: >-
+    2% MDR on card payments, 18% GST on that MDR. TDS 194-O verified
+    separately, once per settlement (razorpay_tds_batch) — see the version
+    history note above.
+  scope:
+    source: razorpay
+    method: card
+    date_from: 2026-06-05
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 2.0
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
 
 - id: razorpay_mdr_netbanking
   version: 1
   name: Razorpay MDR — netbanking
-  description: 0.9% MDR on netbanking, 18% GST on the MDR, 1% TDS 194-O.
+  description: >-
+    0.9% MDR on netbanking, 18% GST on the MDR, 1% TDS 194-O. Retired: TDS is
+    batch-level, not per-transaction — see razorpay_mdr_netbanking v2.
   scope:
     source: razorpay
     method: netbanking
     date_from: 2026-04-01
+    date_to: 2026-06-04
   deductions:
     - type: mdr
       basis: gross
@@ -80,19 +127,42 @@
   effective_confidence: 0.95
   origin: manual
   created_by: system:starter_pack
+  status: retired
+
+- id: razorpay_mdr_netbanking
+  version: 2
+  name: Razorpay MDR — netbanking
+  description: 0.9% MDR on netbanking, 18% GST on the MDR. TDS verified separately.
+  scope:
+    source: razorpay
+    method: netbanking
+    date_from: 2026-06-05
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 0.9
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
 
 - id: razorpay_mdr_upi
   version: 1
   name: Razorpay MDR — UPI
   description: >-
-    UPI carries no MDR, but TDS 194-O still applies to the gross. The zero-rate
-    MDR and GST lines are stated rather than omitted so the stack a human reads
-    matches the stack the other methods produce, and so a future UPI MDR is a
-    rate change rather than a schema change.
+    UPI carries no MDR, but TDS 194-O still applies to the gross. Retired: TDS
+    is batch-level, not per-transaction — see razorpay_mdr_upi v2.
   scope:
     source: razorpay
     method: upi
     date_from: 2026-04-01
+    date_to: 2026-06-04
   deductions:
     - type: mdr
       basis: gross
@@ -110,15 +180,46 @@
   effective_confidence: 0.95
   origin: manual
   created_by: system:starter_pack
+  status: retired
+
+- id: razorpay_mdr_upi
+  version: 2
+  name: Razorpay MDR — UPI
+  description: >-
+    UPI carries no MDR. The zero-rate MDR and GST lines are stated rather than
+    omitted so the stack a human reads matches the stack the other methods
+    produce, and so a future UPI MDR is a rate change rather than a schema
+    change. TDS verified separately, once per settlement.
+  scope:
+    source: razorpay
+    method: upi
+    date_from: 2026-06-05
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 0.0
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
 
 - id: razorpay_mdr_wallet
   version: 1
   name: Razorpay MDR — wallet
-  description: 1.8% MDR on wallet payments, 18% GST on the MDR, 1% TDS 194-O.
+  description: >-
+    1.8% MDR on wallet payments, 18% GST on the MDR, 1% TDS 194-O. Retired:
+    TDS is batch-level, not per-transaction — see razorpay_mdr_wallet v2.
   scope:
     source: razorpay
     method: wallet
     date_from: 2026-04-01
+    date_to: 2026-06-04
   deductions:
     - type: mdr
       basis: gross
@@ -136,15 +237,42 @@
   effective_confidence: 0.95
   origin: manual
   created_by: system:starter_pack
+  status: retired
+
+- id: razorpay_mdr_wallet
+  version: 2
+  name: Razorpay MDR — wallet
+  description: 1.8% MDR on wallet payments, 18% GST on the MDR. TDS verified separately.
+  scope:
+    source: razorpay
+    method: wallet
+    date_from: 2026-06-05
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 1.8
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
 
 - id: razorpay_mdr_emi
   version: 1
   name: Razorpay MDR — EMI
-  description: 2.4% MDR on EMI payments, 18% GST on the MDR, 1% TDS 194-O.
+  description: >-
+    2.4% MDR on EMI payments, 18% GST on the MDR, 1% TDS 194-O. Retired: TDS
+    is batch-level, not per-transaction — see razorpay_mdr_emi v2.
   scope:
     source: razorpay
     method: emi
     date_from: 2026-04-01
+    date_to: 2026-06-04
   deductions:
     - type: mdr
       basis: gross
@@ -152,6 +280,71 @@
     - type: gst_on_fee
       basis: mdr
       rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+  status: retired
+
+- id: razorpay_mdr_emi
+  version: 2
+  name: Razorpay MDR — EMI
+  description: 2.4% MDR on EMI payments, 18% GST on the MDR. TDS verified separately.
+  scope:
+    source: razorpay
+    method: emi
+    date_from: 2026-06-05
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 2.4
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+# --- statutory, batch-level -------------------------------------------------
+#
+# TDS 194-O applies to gross sales through an e-commerce operator, deducted
+# once per settlement regardless of how many transactions or methods make it
+# up (unlike MDR, which is per-transaction because the rate depends on how
+# the customer paid). Scoped to `source: razorpay` only, with no `method`
+# clause — `fc.pipeline._own_store_tds_gaps` is the only caller that ever
+# feeds this rule to `apply_rules`, passing it alone rather than alongside
+# the `razorpay_mdr_*` rules, so it is never a candidate for a per-transaction
+# gap even though its scope alone would not rule that out (§6.7's
+# `candidates()` has no field for "this row is an adjustment, not a
+# payment" — the isolation is enforced by which rules the caller selects,
+# not by scope). Marketplace settlements verify their own TDS inside their
+# commission rule and are excluded by the caller before this rule is ever
+# reached, so a payout is never checked twice.
+
+- id: razorpay_tds_batch
+  version: 1
+  name: Razorpay TDS 194-O — settlement batch
+  description: >-
+    1% TDS under section 194-O on gross, deducted once per settlement.
+    Own-store only: a marketplace settlement's TDS is verified as part of its
+    own commission rule (blinkit_commission / zepto_commission), and checking
+    it again here would be the same finding twice — the caller
+    (fc.pipeline._own_store_tds_gaps) excludes marketplace settlements before
+    this rule is ever applied.
+  scope:
+    source: razorpay
+    date_from: 2026-04-01
+  deductions:
     - type: tds_194o
       basis: gross
       rate: 1.0

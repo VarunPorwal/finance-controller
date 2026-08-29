@@ -34,16 +34,35 @@ def pack() -> RuleSet:
 
 
 def test_the_starter_pack_loads(pack: RuleSet) -> None:
-    assert len(pack.rules) == 7
-    assert all(rule.status == "active" for rule in pack.rules)
+    """13 rows: 5 razorpay_mdr_* rules x 2 versions (a retired v1 that bundled
+    TDS into a per-transaction stack, and the corrected v2), one batch-level
+    TDS rule, and the two marketplace commission rules."""
+    assert len(pack.rules) == 13
     assert all(rule.origin == "manual" for rule in pack.rules)
+    active = [r for r in pack.rules if r.status == "active"]
+    retired = [r for r in pack.rules if r.status == "retired"]
+    assert len(retired) == 5
+    assert {r.rule_id for r in retired} == {f"razorpay_mdr_{m}" for m in MDR_RATES}
+    assert all(r.version == 1 for r in retired)
+    assert len(active) == 8
+
+
+def _active_mdr_rule(pack: RuleSet, method: str) -> Rule:
+    """The live version of one method's MDR rule — never the retired v1,
+    which a plain ``rule_id`` lookup would also return now that both
+    versions ship in the same file."""
+    (rule,) = [
+        r for r in pack.rules if r.rule_id == f"razorpay_mdr_{method}" and r.status == "active"
+    ]
+    return rule
 
 
 @pytest.mark.parametrize("method,rate", sorted(MDR_RATES.items()))
 def test_mdr_by_method_matches_the_merchant_profile(
     pack: RuleSet, method: str, rate: Decimal
 ) -> None:
-    (rule,) = [r for r in pack.rules if r.rule_id == f"razorpay_mdr_{method}"]
+    rule = _active_mdr_rule(pack, method)
+    assert rule.version == 2
     assert rule.scope.method == method
     assert rule.scope.source == "razorpay"
     stack = {d.type: d for d in rule.deductions}
@@ -51,8 +70,32 @@ def test_mdr_by_method_matches_the_merchant_profile(
     assert stack["mdr"].basis == "gross"
     assert stack["gst_on_fee"].rate == Decimal("18")
     assert stack["gst_on_fee"].basis == "mdr"  # on the MDR, not on the sale
-    assert stack["tds_194o"].rate == Decimal("1")
-    assert stack["tds_194o"].basis == "gross"
+    # TDS 194-O is not here: it is batch-level, not per-transaction (see
+    # razorpay_tds_batch) — bundling it into a per-row rule is exactly what
+    # made version 1 wrong.
+    assert "tds_194o" not in stack
+
+
+@pytest.mark.parametrize("method", sorted(MDR_RATES))
+def test_the_retired_mdr_version_is_the_one_that_bundled_tds(pack: RuleSet, method: str) -> None:
+    (retired,) = [
+        r for r in pack.rules if r.rule_id == f"razorpay_mdr_{method}" and r.status == "retired"
+    ]
+    assert retired.version == 1
+    assert {d.type for d in retired.deductions} == {"mdr", "gst_on_fee", "tds_194o"}
+    assert retired.effective_to is not None
+    active = _active_mdr_rule(pack, method)
+    assert retired.effective_to < active.effective_from
+
+
+def test_the_batch_tds_rule_is_statutory_and_settlement_scoped(pack: RuleSet) -> None:
+    (rule,) = pack.by_id("razorpay_tds_batch")
+    assert rule.status == "active"
+    assert rule.scope.method is None  # applies regardless of how the batch was paid
+    assert rule.scope.counterparty_matches is None  # caller excludes marketplace, not scope
+    assert [(d.type, d.basis, d.rate) for d in rule.deductions] == [
+        ("tds_194o", "gross", Decimal("1")),
+    ]
 
 
 @pytest.mark.parametrize("rule_id", ["blinkit_commission", "zepto_commission"])
@@ -71,7 +114,7 @@ def test_the_marketplace_rules_carry_the_quick_commerce_terms(pack: RuleSet, rul
 def test_the_marketplace_rules_absorb_per_order_rounding(pack: RuleSet) -> None:
     """The platform rounds per order; a rate on the batch total misses by paise."""
     (blinkit,) = pack.by_id("blinkit_commission")
-    (card,) = pack.by_id("razorpay_mdr_card")
+    card = _active_mdr_rule(pack, "card")
     assert blinkit.tolerance.absolute_paise > card.tolerance.absolute_paise
 
 
@@ -90,10 +133,21 @@ def test_the_blinkit_stack_reproduces_the_prd_example_to_the_paise(pack: RuleSet
     assert 19_000_00 - stack.total_paise == 3_240_00
 
 
-def test_every_rule_is_effective_from_the_start_of_the_fiscal_year(pack: RuleSet) -> None:
-    """Which is also what makes a 15 March transaction out of scope for all of them."""
-    assert {rule.effective_from for rule in pack.rules} == {date(2026, 4, 1)}
-    assert all(rule.effective_to is None for rule in pack.rules)
+def test_the_marketplace_and_tds_batch_rules_are_effective_from_the_fiscal_year(
+    pack: RuleSet,
+) -> None:
+    """Which is also what makes a 15 March transaction out of scope for them.
+
+    The ``razorpay_mdr_*`` rules are excluded here on purpose: their retired
+    v1 and corrected v2 straddle a mid-year cutover (the TDS-bundling fix),
+    so "everything starts 1 April" is no longer true of the whole pack — see
+    ``test_the_retired_mdr_version_is_the_one_that_bundled_tds`` for their
+    actual windows.
+    """
+    undated_rules = [r for r in pack.rules if not r.rule_id.startswith("razorpay_mdr_")]
+    assert undated_rules  # guards the guard
+    assert {rule.effective_from for rule in undated_rules} == {date(2026, 4, 1)}
+    assert all(rule.effective_to is None for rule in undated_rules)
 
 
 def test_no_rule_deducts_more_than_the_gross(pack: RuleSet) -> None:
@@ -113,16 +167,24 @@ def test_the_shipped_hashes_are_stable(pack: RuleSet) -> None:
     closes, and a hash that drifts silently makes the audit trail unreadable
     across runs.
     """
-    assert {rule.rule_id: rule.version_hash[:16] for rule in pack.rules} == {
-        "razorpay_mdr_card": "3463d31001218cb6",
-        "razorpay_mdr_netbanking": "71cd3ebbeda01af3",
-        "razorpay_mdr_upi": "f9b3172f29c4ab25",
-        "razorpay_mdr_wallet": "a295d78ce55b16a9",
-        "razorpay_mdr_emi": "06092ccf471ea921",
-        "blinkit_commission": "5a4fc8c4b8e9005a",
-        "zepto_commission": "a6760c36c87c6e6c",
+    # Keyed by (rule_id, version): rule_id alone is no longer unique now that
+    # razorpay_mdr_* ships a retired v1 alongside its corrected v2.
+    assert {(rule.rule_id, rule.version): rule.version_hash[:16] for rule in pack.rules} == {
+        ("razorpay_mdr_card", 1): "e6b6860c5a42b412",
+        ("razorpay_mdr_card", 2): "b696a60038fd509f",
+        ("razorpay_mdr_netbanking", 1): "f7c1243071ebbbbd",
+        ("razorpay_mdr_netbanking", 2): "6b0bdcf71a739209",
+        ("razorpay_mdr_upi", 1): "159d8aa59984d518",
+        ("razorpay_mdr_upi", 2): "d81ce2ccba4b6744",
+        ("razorpay_mdr_wallet", 1): "96b0fb7300e6c09b",
+        ("razorpay_mdr_wallet", 2): "21570e26f6688c4f",
+        ("razorpay_mdr_emi", 1): "5dca07cf84d7cb2d",
+        ("razorpay_mdr_emi", 2): "50a560be6d6aa91f",
+        ("razorpay_tds_batch", 1): "ee905986f025650b",
+        ("blinkit_commission", 3): "5a4fc8c4b8e9005a",
+        ("zepto_commission", 1): "a6760c36c87c6e6c",
     }
-    assert pack.ruleset_hash.startswith("7abd2f300d4fc820")
+    assert pack.ruleset_hash.startswith("1cb86391f7a1b7d5")
 
 
 def test_the_pack_is_free_of_duplicate_ids(pack: RuleSet) -> None:

@@ -59,6 +59,10 @@ class Config(BaseModel):
     max_rechecks: int = 3
     typed_confirm_paise: int = 5_000_000  # ₹50,000
 
+    # Exception pipeline (§6.8)
+    dispute_window_days: int = 30  # RBI chargeback contest window
+    missing_in_bank_sla_days: int = 2  # escalate to Razorpay support after this
+
     # Auth
     jwt_secret: str = ""
     jwt_ttl_minutes: int = 15
