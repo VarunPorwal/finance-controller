@@ -89,6 +89,27 @@ a task complete. For anything touching matching, rules or tiering, also run
 - **A rule shrinks an exception**, it doesn't pass or fail. `₹3,240 unexplained
   after rule X applied`, not `₹19,000 mismatch`.
 - **Fuzzy matches cap at 0.75 and never auto-close.** Enforced by assertion.
+- **`fc/eval/report.py` was created early in Prompt 4 as a partial** so
+  `dev.ps1 eval` would run. Prompt 10 must replace it with the full harness per
+  PRD §12.4, not extend the stub.
+- **`source_coverage_bonus` (1.05, three-way) moved 0 matches as of Prompt 4** —
+  three-way exact matches already clamp at 1.0, so multiplying by 1.05 changes
+  nothing. It should start firing once stage 5's 0.75 cap lands (three-way fuzzy
+  reaches 0.7875). If `make eval` still reports 0 after Prompt 5, remove it
+  rather than leaving decoration in the confidence formula.
+- **`order_id` identifies an order, not a money movement.** A payment, its
+  partial refund and its chargeback all quote the same order id and settle in
+  different batches. `fc/matching/stages/exact_ref.py` splits order-scoped join
+  keys by payment/refund side; without that, stage 1 merges a payment with its
+  own refund and precision drops below 100%.
+- **A ledger narration citing two ids of one kind identifies itself with
+  neither.** `Rolling reserve release settlement setl_B for setl_A` merged two
+  settlements until `LedgerRefs.identity_claims()` started requiring exactly
+  one. Extraction is not attribution.
+- **A shared reference prefix is not evidence.** An RBI UTR is
+  `bank + year + day-of-year + sequence`, so one 8-character prefix covers a
+  dozen settlements. `date_shift` requires a *unique completion*, not a prefix
+  match.
 - **Subset-sum with multiple valid subsets returns None**, producing an
   exception. Never pick one.
   - **RLS tests must run as `fc_app_user`, not the owner.** `neondb_owner`

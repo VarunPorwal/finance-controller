@@ -121,7 +121,11 @@ def build(
                     party="",
                     debit_paise=0,
                     credit_paise=order.amount_paise,
-                    narration=f"Sales order {order.order_id}",
+                    narration=(
+                        f"Sales order {order.order_id}"
+                        if order.ledger_reference_visible
+                        else f"Sales invoice dated {order.order_date.isoformat()}"
+                    ),
                     gt_group=order.gt_group,
                     gt_label=sales_label,
                     bucket=sales_bucket,

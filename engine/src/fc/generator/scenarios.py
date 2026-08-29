@@ -159,6 +159,13 @@ class Order:
     is_refund_only: bool = False
     gt_label: str | None = None
     gt_bucket: str = "matched"
+    #: Whether this order's ledger voucher quotes its order id (scenario 16).
+    #: A real Tally Sales narration often carries no gateway reference at all,
+    #: and when two orders in a batch share an amount and a date that is what
+    #: makes them genuinely indistinguishable. Leaving the id in the narration
+    #: would let exact reference matching resolve them in one hop, which is not
+    #: the failure mode the scenario exists to produce.
+    ledger_reference_visible: bool = True
     #: Marketplace-only per-order override (scenario 18: a rate change lands
     #: mid-settlement, so orders on either side of the cutover carry
     #: different rates — only an effective-dated rule resolves the whole

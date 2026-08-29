@@ -291,11 +291,17 @@ def generate(seed: int, n: int) -> dict[str, Any]:
         settlement.scenario = 16
         if len(settlement.orders) >= 2:
             a, b = settlement.orders[0], settlement.orders[1]
-            group = issue_id("grp_")
             b.amount_paise = a.amount_paise
             b.order_date = a.order_date
             for order in (a, b):
-                order.gt_group = group
+                # The rows still belong to their settlement - that is what the
+                # money did - so gt_group stays the settlement id. What makes
+                # them ambiguous is that their ledger legs carry no order
+                # reference, leaving an identical amount and date as the only
+                # evidence. Re-grouping them under a synthetic id instead would
+                # mark a correct pairing as wrong and reward a matcher for
+                # ignoring an identifier it can plainly see.
+                order.ledger_reference_visible = False
                 order.gt_label = "ambiguous_multi_candidate"
                 order.gt_bucket = "exception"
 
