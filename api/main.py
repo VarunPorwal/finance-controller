@@ -26,6 +26,7 @@ from api import scheduler as scheduler_module
 from api.deps import get_config
 from api.errors import register_exception_handlers
 from api.routers import (
+    agent,
     audit,
     auth,
     cash,
@@ -81,6 +82,7 @@ app.include_router(rules.router, prefix="/api/v1")
 app.include_router(cash.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
+app.include_router(agent.router, prefix="/api/v1")
 
 
 def main(argv: list[str] | None = None) -> int:

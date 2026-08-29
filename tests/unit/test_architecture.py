@@ -29,6 +29,13 @@ FORBIDDEN_IN_ENGINE = ("api", "db", "sqlalchemy", "alembic", "fastapi", "asyncpg
 #: Modules whose output decides whether money is reconciled (CLAUDE.md rule 2).
 DECISION_PACKAGES = ("fc/matching", "fc/rules/evaluator.py", "fc/exceptions/tier.py", "fc/cash")
 
+#: Modules that must run with no network, whatever ``LLM_MODE`` says (hard
+#: rule 6: ``make eval`` runs with no database and no network). The mode flag is
+#: a runtime switch and can be set wrongly; an import graph cannot. ``fc/llm``
+#: reaching any of these would make "the accuracy suite needs no network" a
+#: claim about configuration rather than about the code.
+NETWORK_FREE_PACKAGES = ("fc/pipeline.py", "fc/eval", "fc/generator")
+
 #: Trees that carry money arithmetic (PRD §12.3), scanned by ``rglob`` so a new
 #: module is covered the moment it is written rather than when somebody
 #: remembers to add it here.
@@ -108,6 +115,44 @@ def test_decision_modules_do_not_import_the_llm() -> None:
                 if _imports_the_llm(node):
                     offenders.append(f"{module.relative_to(ENGINE_SRC)}:{node.lineno}")
     assert offenders == [], f"decision modules import fc.llm: {offenders}"
+
+
+def test_the_pipeline_eval_and_generator_do_not_import_the_llm() -> None:
+    """Broader than the decision ban, and for a different reason.
+
+    ``fc.pipeline`` and ``fc.eval`` are allowed to *decide* things — that is
+    their job. What they may not do is need a network to do it. An import here
+    would not break any rule about LLMs deciding money; it would break the
+    promise that ``make eval`` runs offline and byte-identically, which is the
+    one the determinism gate rests on.
+    """
+    offenders: list[str] = []
+    for target in NETWORK_FREE_PACKAGES:
+        path = ENGINE_SRC / target
+        candidates = (
+            sorted(path.rglob("*.py")) if path.is_dir() else ([path] if path.exists() else [])
+        )
+        assert candidates, f"{target} matched no modules — the scan is mis-rooted"
+        for module in candidates:
+            tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
+            for node in ast.walk(tree):
+                if _imports_the_llm(node):
+                    offenders.append(f"{module.relative_to(ENGINE_SRC)}:{node.lineno}")
+    assert offenders == [], f"network-free modules import fc.llm: {offenders}"
+
+
+def test_the_llm_package_is_the_only_place_httpx_is_imported() -> None:
+    """``httpx`` is an engine dependency now (PRD Appendix A). Confining it to
+    ``fc/llm`` is what keeps "the engine opens no sockets" true of everything
+    else — including every module ``make eval`` touches."""
+    offenders: list[str] = []
+    for module in _engine_modules():
+        relative = str(module.relative_to(ENGINE_SRC)).replace("\\", "/")
+        if relative.startswith("fc/llm/"):
+            continue
+        if "httpx" in _imported_roots(module):
+            offenders.append(relative)
+    assert offenders == [], f"httpx imported outside fc/llm: {offenders}"
 
 
 def _money_modules() -> list[Path]:

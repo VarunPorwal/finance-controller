@@ -20,6 +20,7 @@ pooled connection: the ``finally`` block below rolls back anything still open.
 from __future__ import annotations
 
 import sys
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -42,6 +43,9 @@ if str(ROOT / "engine" / "src") not in sys.path:
 
 from api.errors import ApiError  # noqa: E402
 from fc.config import Config, asyncpg_url, load_config  # noqa: E402
+from fc.llm.client import LLMClient  # noqa: E402
+from fc.llm.schemas import LLMCallRecord  # noqa: E402
+from fc.llm.sql_guard import STATEMENT_TIMEOUT_MS  # noqa: E402
 
 __all__ = [
     "AuthenticatedUser",
@@ -203,3 +207,178 @@ async def finish(session: AsyncSession, *, dry_run: bool) -> None:
         await session.rollback()
     else:
         await session.commit()
+
+
+# --- LLM wiring (PRD §7) -----------------------------------------------------
+
+
+class LLMCallBuffer:
+    """Holds the records the router emitted until a session can write them.
+
+    The router cannot write ``llm_calls`` itself — ``tests/unit/test_architecture.py``
+    forbids importing ``sqlalchemy`` anywhere under ``engine/src``, and that is
+    the right constraint: the engine has no business knowing a database exists.
+    So it emits :class:`~fc.llm.schemas.LLMCallRecord` values to this sink and a
+    request handler drains them into its own transaction afterwards.
+
+    One buffer serves the whole process, so concurrent requests can drain each
+    other's records. That is harmless — every record carries its own tenant and
+    run id, so nothing is mis-attributed; only the transaction a row lands in is
+    shared, and a row is never lost because a drain removes what it returns.
+    """
+
+    def __init__(self) -> None:
+        self._records: list[LLMCallRecord] = []
+        self._lock = threading.Lock()
+
+    def sink(self, record: LLMCallRecord) -> None:
+        with self._lock:
+            self._records.append(record)
+
+    def drain(self) -> list[LLMCallRecord]:
+        with self._lock:
+            drained, self._records = self._records, []
+        return drained
+
+
+@lru_cache(maxsize=1)
+def get_llm_buffer() -> LLMCallBuffer:
+    return LLMCallBuffer()
+
+
+@lru_cache(maxsize=1)
+def get_llm_client() -> LLMClient:
+    """One router per process. Health counters and the disk cache live on it,
+    so a fresh client per request would defeat both."""
+    return LLMClient(get_config(), sink=get_llm_buffer().sink)
+
+
+# --- the text-to-SQL execution path (PRD §7.8) -------------------------------
+
+
+@lru_cache(maxsize=1)
+def readonly_url() -> str | None:
+    """``DATABASE_URL_READONLY``, but only when it is genuinely a *different* role.
+
+    On Neon the connection string that variable usually holds points at
+    ``neondb_owner``, which carries ``rolbypassrls`` through ``neon_superuser``.
+    Running generated SQL there would trade RLS away to gain a read-only
+    guarantee the transaction below already provides — one real layer where the
+    documentation claims three. So it is used only when it is set and differs
+    from ``DATABASE_URL``, and it is reported in ``/agent/health`` either way so
+    the active combination is visible rather than assumed.
+    """
+    cfg = get_config()
+    url = cfg.database_url_readonly
+    if not url or url == cfg.database_url:
+        return None
+    return url
+
+
+@lru_cache(maxsize=1)
+def get_readonly_sessionmaker() -> async_sessionmaker[AsyncSession] | None:
+    url = readonly_url()
+    if url is None:
+        return None
+    engine = create_async_engine(asyncpg_url(url), pool_size=2, max_overflow=2, pool_pre_ping=True)
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+@asynccontextmanager
+async def readonly_session(tenant_id: str, role: str) -> AsyncIterator[AsyncSession]:
+    """A transaction that cannot write, cannot run long, and cannot see another
+    tenant — the three layers §7.8 asks for, in the order they must be applied.
+
+    ``SET TRANSACTION READ ONLY`` has to be the first statement in the
+    transaction (Postgres rejects it once a query has run), which is why this
+    opens its own session rather than reusing the request's: ``scoped_session``
+    has already issued two ``set_config`` calls by the time a handler sees it.
+    """
+    maker = get_readonly_sessionmaker() or get_sessionmaker()
+    async with maker() as session:
+        await session.begin()
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        await session.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
+        await session.execute(
+            text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_id}
+        )
+        await session.execute(text("SELECT set_config('app.role', :r, true)"), {"r": role})
+        try:
+            yield session
+        finally:
+            await session.rollback()
+
+
+def sql_isolation_layers() -> list[str]:
+    """What is actually standing between a generated query and the data."""
+    layers = ["sqlglot_guard", "read_only_transaction", "statement_timeout", "rls"]
+    if readonly_url() is not None:
+        layers.append("readonly_role")
+    return layers
+
+
+async def persist_llm_calls(
+    session: AsyncSession, buffer: LLMCallBuffer, *, tenant_id: str
+) -> None:
+    """Drain the router's records into ``llm_calls`` (PRD §7.11).
+
+    Runs inside the caller's transaction, so the rows commit or roll back with
+    the work they describe — a dry run leaves no trace of its own calls, which
+    is right.
+
+    It does **not** swallow failures, and the reason is worth stating: a failed
+    INSERT poisons the SQLAlchemy transaction, so "catch and carry on" would
+    turn one clear error into a confusing one several statements later. There
+    is no foreign key on this table and nothing to violate, so a failure here
+    means schema drift or an RLS misconfiguration — both of which should be
+    loud. The router's own sink is the layer that never raises (it catches
+    around this being called), so an observability problem still cannot fail an
+    LLM call; it can only fail the request that was already writing to the
+    database.
+    """
+    from db.models import LLMCall
+    from fc.models.ids import new_ulid
+
+    for record in buffer.drain():
+        session.add(
+            LLMCall(
+                call_id=new_ulid("llm_"),
+                tenant_id=record.tenant_id or tenant_id,
+                run_id=record.run_id,
+                purpose=record.purpose,
+                provider=record.provider,
+                model=record.model,
+                tier=record.tier,
+                ladder_position=record.ladder_position,
+                prompt_hash=record.prompt_hash,
+                cached=record.cached,
+                input_tokens=record.input_tokens,
+                output_tokens=record.output_tokens,
+                thinking_tokens=record.thinking_tokens,
+                latency_ms=record.latency_ms,
+                outcome=record.outcome,
+                verified=record.verified,
+            )
+        )
+    await session.flush()
+
+
+async def rescope(session: AsyncSession, user: AuthenticatedUser) -> None:
+    """Re-apply the tenant scope after somebody else ended the transaction.
+
+    ``set_config(..., is_local=true)`` is scoped to a *transaction*, which is
+    what makes it safe on a pooled connection — and what makes it disappear the
+    moment anything commits or rolls back. ``/agent/execute`` calls the same
+    endpoint functions a click does, and each of those calls :func:`finish`,
+    so by the time the agent handler appends its own audit event the scope its
+    session started with is gone and RLS refuses the insert.
+
+    Calling this after dispatching is the fix, and it is preferable to the
+    alternatives: not letting the inner endpoints commit would mean not reusing
+    them, and reusing them is the property that makes "an instruction cannot do
+    what a click cannot" true rather than asserted.
+    """
+    await session.execute(
+        text("SELECT set_config('app.tenant_id', :t, true)"), {"t": user.tenant_id}
+    )
+    await session.execute(text("SELECT set_config('app.role', :r, true)"), {"r": user.role})

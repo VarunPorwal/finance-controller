@@ -7,11 +7,22 @@ dependencies = [
     "pydantic>=2.9",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "httpx>=0.28",
+    "sqlglot>=25.24",
 ]
 
 # The dependency list above is the enforcement mechanism for the architectural
 # rule "engine/ imports nothing from api/ or db/" (PRD §3.7). sqlalchemy and
 # fastapi are not resolvable from this package, so the import cannot be written.
+#
+# httpx and sqlglot were added for the AI layer (PRD §7) and are deliberately
+# the only two. httpx is an HTTP client, sqlglot a SQL parser; neither can open
+# a database connection, so the boundary this list draws still holds. The Gemini
+# and Groq adapters are hand-written against the providers' REST APIs rather
+# than their SDKs, because the router's whole design turns on telling a 429
+# carrying Retry-After apart from a timeout, a 5xx, a safety block and a schema
+# failure — an SDK folds exactly those into its own exception hierarchy, and
+# unwrapping them back to an HTTP status is more code than the request builder.
 
 [build-system]
 requires = ["hatchling"]

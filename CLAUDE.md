@@ -167,9 +167,45 @@ target that enforces them.
   carries `rolbypassrls` via Neon's `neon_superuser`, so `FORCE ROW LEVEL
   SECURITY` doesn't constrain it. Verifying tenant isolation on the owner
   connection gives a false pass. Use `DATABASE_URL_APP`.
-- **`DATABASE_URL_READONLY` points at the owner until day 8.** The
-  text-to-SQL guard is not yet backed by a real read-only role. Don't
-  treat it as enforced.
+- **`/agent/ask` runs on the app role inside a read-only transaction, not on
+  `DATABASE_URL_READONLY`.** That variable points at `neondb_owner`, which
+  carries `rolbypassrls` — using it would trade RLS away to gain a read-only
+  guarantee `SET TRANSACTION READ ONLY` already provides. It is a fourth layer
+  when a genuinely distinct role is configured, never the mechanism.
+  `sql_isolation_layers()` reports what is actually active.
+- **`SET LOCAL` dies at the next commit.** `api/deps.scoped_session` sets
+  `app.tenant_id` per *transaction*, so any handler that calls another
+  endpoint (which calls `finish`, which commits) loses its tenant scope and RLS
+  refuses everything after. `/agent/execute` calls `rescope()` after
+  dispatching for exactly this reason; it cost a day to find the first time.
+- **The router cannot log to `llm_calls`** — `test_architecture.py` forbids
+  `sqlalchemy` anywhere under `engine/src`. It emits `LLMCallRecord` to an
+  injected sink and `api.deps.persist_llm_calls` writes them. Adding the import
+  breaks the build, not just the layering.
+- **The LLM cache key excludes the model on purpose (§7.3 guard 2) and includes
+  the tenant (§9.5).** Adding the model would make a rotation silently
+  invalidate the whole cache, including the pre-warmed demo responses; dropping
+  the tenant would let one tenant's data surface in another's answer.
+- **A purpose in `HAS_DOWNSTREAM_CHECK` is never cached by `call()`.** Only
+  `client.confirm()` writes it, after the deterministic check passes — today
+  that is `pdf_extract` waiting on `verify_balance_continuity`. Adding a purpose
+  with a downstream check means adding it to that set; forgetting means a
+  rejected output is cached and re-served on every retry.
+- **`sqlglot` 30 renamed the `from` argument key to `from_`.** That turned the
+  tenant-predicate injection into a silent no-op which every test still passed,
+  because the SQL stayed valid and still returned rows — just every tenant's.
+  `_inject_tenant_predicate` now counts what it covered and refuses the query if
+  any reference went unscoped. Don't remove that postcondition.
+- **The parsed-command store is in-process.** `/agent/execute` re-validates
+  against fresh state and refuses when the effects differ from the preview the
+  human saw, so the store is a convenience, never a source of truth.
+- **Cluster labels are written by the LLM and read by nobody.**
+  `grouping_key` decides membership. If a future change makes membership read
+  `label`, the cosmetic guarantee is gone.
+- **The post-run pass is batched at three calls** (narrative, all cluster
+  labels, all explanations). One call per cluster would put fifteen on a run
+  budgeted for six; `tests/unit/test_llm_call_budget.py` asserts the cost does
+  not grow with the queue.
 - **The IDFC, ICICI and Tally-XML shapes in `fc/ingest/` are invented, not
   sourced from a real export.** The PRD gives HDFC's NEFT format, the UPI/
   IMPS/RTGS/NACH shapes, and the Tally field table precisely, but nothing
@@ -187,6 +223,12 @@ target that enforces them.
 - recall ≥ 90%
 - no float in money modules
 - no `fc.llm` import in decision modules
+- no `fc.llm` import in `fc/pipeline.py`, `fc/eval/` or `fc/generator/` — a
+  different rule for a different reason: those may decide things, they may not
+  need a network to do it (hard rule 6)
+- `httpx` imported nowhere in `engine/` outside `fc/llm/`
+- `LLM_MODE=off` produces byte-identical gate metrics
+  (`tests/eval/test_llm_mode_off.py`)
 - same seed → same output
 - mypy strict passes on `engine/`
 

@@ -29,8 +29,19 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from api.audit_log import append_audit
 from api.converters import event_from_row, exception_from_row
-from api.deps import AuthenticatedUser, current_user, db_session, finish, get_config
+from api.deps import (
+    AuthenticatedUser,
+    LLMCallBuffer,
+    current_user,
+    db_session,
+    finish,
+    get_config,
+    get_llm_buffer,
+    get_llm_client,
+    persist_llm_calls,
+)
 from api.errors import ApiError
+from api.generation import generate_for_run
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
 from db.models import Cluster as ClusterRow
 from db.models import ExceptionRow, Run, TransactionEventRow
@@ -38,6 +49,7 @@ from db.models import Match as MatchRow
 from fc.audit.replay import ReplayDiff, diff_exceptions, replay
 from fc.config import Config
 from fc.eval.corpus import load_corpus
+from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory, new_ulid
 from fc.pipeline import PIPELINE_STAGES, PipelineResult, run_pipeline
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
@@ -309,6 +321,8 @@ async def create_run(
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
     cfg: Config = Depends(get_config),
+    client: LLMClient = Depends(get_llm_client),
+    buffer: LLMCallBuffer = Depends(get_llm_buffer),
 ) -> RunOut:
     started_at = datetime.now(UTC)
     run_id = new_ulid("run_")
@@ -374,6 +388,14 @@ async def create_run(
         run_id=run_id,
         ruleset_hash=ruleset.ruleset_hash,
     )
+    # §7.10: prose after the numbers, never before. The run is already
+    # reconciled and persisted; this adds three batched calls' worth of
+    # wording, and any failure inside leaves the deterministic label and
+    # template in place. A dry run skips it — there would be no rows to label.
+    if not dry_run:
+        await generate_for_run(session, run_id=run_id, tenant_id=user.tenant_id, client=client)
+        await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+
     result_out = _run_out(run_row)
     await finish(session, dry_run=dry_run)
     return result_out

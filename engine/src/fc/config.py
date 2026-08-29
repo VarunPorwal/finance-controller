@@ -42,7 +42,7 @@ class Config(BaseModel):
     gemini_api_key: str = ""
     groq_api_key: str = ""
     llm_mode: LLMMode = "live"
-    llm_cache_dir: str = "/tmp/fc-llm-cache"
+    llm_cache_dir: str = "./.llm-cache"
     llm_cache_ttl_days: int = 7
     llm_max_calls_per_run: int = 10
     gemini_context_cache_ttl: int = 3600

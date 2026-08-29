@@ -8,6 +8,7 @@ serialise. No business logic in api/routers/.").
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
@@ -21,6 +22,7 @@ from api.audit_log import append_audit
 from api.converters import event_from_row, exception_from_row, match_from_row
 from api.deps import AuthenticatedUser, current_user, db_session, finish, get_config
 from api.errors import ApiError
+from api.notify import notify_escalation
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
 from db.models import ExceptionRow, TransactionEventRow
 from db.models import Match as MatchRow
@@ -159,7 +161,9 @@ async def list_exceptions(
             )
         )
     rows = (await session.scalars(stmt.limit(limit + 1))).all()
-    items = [exception_from_row(r) for r in rows[:limit]]
+    page = rows[:limit]
+    narrations = await _narrations(session, page)
+    items = [exception_from_row(r, narrations=narrations.get(r.exception_id, ())) for r in page]
     next_cursor = None
     if len(rows) > limit:
         last = items[-1]
@@ -174,11 +178,40 @@ async def _load(session: AsyncSession, exception_id: str) -> ExceptionRow:
     return row
 
 
+async def _narrations(
+    session: AsyncSession, rows: Sequence[ExceptionRow]
+) -> dict[str, list[str | None]]:
+    """Linked narrations per exception, in one query for the whole page.
+
+    Feeds the ``suspicious_narration`` flag (PRD §10.3 layer 6), which is
+    derived on read rather than stored — there is no column for it and the
+    schema is frozen, and recomputing means a sharpened heuristic applies to
+    history rather than only to newly ingested rows.
+    """
+    event_ids = sorted({eid for row in rows for eid in row.event_ids})
+    if not event_ids:
+        return {}
+    pairs = (
+        await session.execute(
+            select(TransactionEventRow.event_id, TransactionEventRow.raw_narration).where(
+                TransactionEventRow.event_id.in_(event_ids)
+            )
+        )
+    ).all()
+    by_event = {event_id: narration for event_id, narration in pairs}
+    return {
+        row.exception_id: [by_event.get(eid) for eid in row.event_ids if eid in by_event]
+        for row in rows
+    }
+
+
 @router.get("/{exception_id}", response_model=Exception_)
 async def get_exception(
     exception_id: str, session: AsyncSession = Depends(db_session)
 ) -> Exception_:
-    return exception_from_row(await _load(session, exception_id))
+    row = await _load(session, exception_id)
+    narrations = await _narrations(session, [row])
+    return exception_from_row(row, narrations=narrations.get(exception_id, ()))
 
 
 @router.get("/{exception_id}/evidence", response_model=ExceptionEvidenceOut)
@@ -195,7 +228,7 @@ async def get_evidence(
         await session.scalars(select(MatchRow).where(MatchRow.event_ids.overlap(row.event_ids)))
     ).all()
     return ExceptionEvidenceOut(
-        exception=exception_from_row(row),
+        exception=exception_from_row(row, narrations=[e.raw_narration for e in events]),
         events=[event_from_row(e) for e in events],
         matches=[match_from_row(m) for m in matches],
     )
@@ -316,6 +349,7 @@ async def escalate_exception(
     dry_run: bool = Query(False),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
+    cfg: Config = Depends(get_config),
 ) -> Exception_:
     row = await _load(session, exception_id)
     now = datetime.now(UTC)
@@ -337,7 +371,18 @@ async def escalate_exception(
         run_id=row.run_id,
     )
     result = exception_from_row(row)
+    amount_paise = row.amount_paise
     await finish(session, dry_run=dry_run)
+    if not dry_run:
+        # N1 (§2.5.9). After the commit, so an email never announces a change
+        # that was rolled back — and fire-and-forget, so Resend being down
+        # cannot fail an escalation that has already happened.
+        await notify_escalation(
+            cfg,
+            exception_id=exception_id,
+            reason=body.reason,
+            amount_paise=amount_paise,
+        )
     return result
 
 

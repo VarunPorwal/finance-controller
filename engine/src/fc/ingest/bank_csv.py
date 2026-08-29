@@ -27,7 +27,14 @@ from fc.ingest.validators import (
 from fc.models.money import to_paise
 from fc.models.transaction import Direction, TransactionEvent
 
-__all__ = ["BankIngestResult", "MalformedRow", "RawBankRow", "parse_bank_csv", "parse_csv_line"]
+__all__ = [
+    "BankIngestResult",
+    "MalformedRow",
+    "RawBankRow",
+    "parse_bank_csv",
+    "parse_csv_line",
+    "rows_to_events",
+]
 
 #: PRD §4.1.3 field table, in header order.
 HEADER = (
@@ -143,8 +150,46 @@ def parse_bank_csv(
 
     balanced, breaks = verify_balance_continuity(parsed_rows, opening_balance_paise)
 
+    events = rows_to_events(
+        parsed_rows,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        narration_parser=narration_parser,
+        issue_id=issue_id,
+        ingested_at=ingested_at,
+        aliases=aliases,
+        rejections=rejections,
+    )
+
+    return BankIngestResult(
+        ingest=IngestResult(events=tuple(events), rejections=tuple(rejections)),
+        balanced=balanced,
+        breaks=tuple(breaks),
+    )
+
+
+def rows_to_events(
+    rows: Sequence[RawBankRow],
+    *,
+    run_id: str,
+    tenant_id: str,
+    narration_parser: NarrationParser,
+    issue_id: Callable[[str], str],
+    ingested_at: datetime,
+    aliases: AliasTable | None,
+    rejections: list[Rejection],
+) -> list[TransactionEvent]:
+    """Normalise parsed bank rows into events. Shared by the CSV and PDF paths.
+
+    ``fc.ingest.bank_pdf`` calls this with rows a model transcribed, after the
+    balance check has agreed with them. Sharing the function rather than
+    reimplementing it is what makes "a PDF and a CSV of the same statement
+    produce identical events" true rather than aspirational — the narration
+    parse, the counterparty alias, the rail-dependent UTR/RRN choice and the
+    idempotency hash all have exactly one implementation.
+    """
     events: list[TransactionEvent] = []
-    for row in parsed_rows:
+    for row in rows:
         if row.deposit_paise:
             direction: Direction = "credit"
             amount_paise = row.deposit_paise
@@ -193,12 +238,7 @@ def parse_bank_csv(
                 ingested_at=ingested_at,
             )
         )
-
-    return BankIngestResult(
-        ingest=IngestResult(events=tuple(events), rejections=tuple(rejections)),
-        balanced=balanced,
-        breaks=tuple(breaks),
-    )
+    return events
 
 
 def _to_raw_row(fields: dict[str, str]) -> RawBankRow:

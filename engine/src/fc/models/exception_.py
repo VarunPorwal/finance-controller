@@ -120,6 +120,19 @@ class Exception_(BaseModel):
     signature: str  # shape hash for 3x learning
     created_at: datetime
 
+    #: PRD §10.3 layer 6. Derived on read from the linked events' narrations by
+    #: ``fc.llm.injection.scan_narration`` — there is no column for it and the
+    #: schema is frozen, and it would be the wrong place anyway: the flag is a
+    #: property of the text, so recomputing it means a sharpened heuristic
+    #: applies to history instead of only to rows ingested after the change.
+    #:
+    #: Surfaced to the user, not just logged. A merchant whose bank narration
+    #: contains text engineered to steer an automated finance system has a real
+    #: problem — a compromised portal, or a counterparty doing it deliberately —
+    #: and that is worth telling them about on its own merits.
+    suspicious_narration: bool = False
+    suspicious_patterns: list[str] = Field(default_factory=list)
+
     @property
     def never_auto(self) -> bool:
         return self.category in NEVER_AUTO

@@ -804,10 +804,12 @@ finance-controller/
 │       │   ├── ledger.py            # hash chain
 │       │   └── replay.py
 │       ├── llm/
-│       │   ├── client.py            # provider abstraction + cache + fallback
-│       │   ├── gemini.py
-│       │   ├── groq.py
+│       │   ├── client.py            # router: tiers, health, cache, terminals
+│       │   ├── gemini.py            # hand-written REST adapter
+│       │   ├── groq.py              # hand-written REST adapter
 │       │   ├── schemas.py
+│       │   ├── injection.py         # §10.3 layers 2, 3, 6
+│       │   ├── generate.py          # §7.10 batched post-run prose
 │       │   ├── prompts/
 │       │   │   ├── sql_system.md
 │       │   │   ├── command_system.md
@@ -815,7 +817,10 @@ finance-controller/
 │       │   │   ├── extraction.md
 │       │   │   └── rule_draft.md
 │       │   ├── sql_guard.py         # sqlglot validation
-│       │   └── embeddings.py
+│       │   └── embeddings.py        # CUT (§0.1); holds the terminal
+│       ├── agent/                   # the deterministic half of §8
+│       │   ├── permissions.py       # §9.2 roles, enforced in the validator
+│       │   └── validator.py         # §8.5's seven push-back rules
 │       ├── generator/
 │       │   ├── seed.py
 │       │   ├── scenarios.py         # the 16 failure modes
@@ -832,6 +837,8 @@ finance-controller/
 │   ├── main.py
 │   ├── deps.py
 │   ├── routers/                     # one per API group above
+│   │   └── agent.py                 # parse / execute / ask / narrative / health
+│   ├── generation.py                # database <-> fc.llm.generate seam
 │   ├── scheduler.py                 # APScheduler jobs
 │   └── notify.py                    # Resend
 ├── db/
@@ -2471,7 +2478,7 @@ The router is the most dangerous component in the build, because it touches ever
 | **Infinite rotation** | All models unhealthy, loop spins | `for i in range(n)` bounded scan; returns `None` and descends a tier |
 | **Cache thrash** | Different models produce different outputs for the same prompt, cache key doesn't include model, results become non-deterministic | Cache key **excludes** model deliberately — any tier member's answer is acceptable for the task, and determinism is guaranteed by the deterministic core, not by the LLM. Document this explicitly |
 | **Cursor race** | Two threads pick the same model concurrently, double-count quota | `threading.Lock` on cursor advance; health counters use atomic increments |
-| **Quota undercount** | Multiple API-server instances share a project quota but track health locally | Single instance in the buildathon. For Phase 2, move health to Redis. **State this limitation rather than hiding it** |
+| **Quota undercount** | Multiple API-server instances share a project quota but track health locally | Single instance in the buildathon. For Phase 2, move health to Redis. **State this limitation rather than hiding it** — `/agent/health` reports `health_scope: "process"`, so the honest answer is in the API rather than only in a docstring. The **parsed-command store** in `api/routers/agent.py` carries the same limitation for the same reason and moves to Redis in the same change: a restart or a second instance loses previews. It is survivable because that store is a convenience, not a source of truth — `/agent/execute` re-validates against fresh database state and refuses when the effects have changed, so a lost preview costs one re-parse and nothing else |
 | **Silent degradation** | System quietly falls to templates, nobody notices, demo shows worse output | `/agent/health` reports `degraded: true`; the UI header shows the tier status strip; the run summary flags degraded output |
 | **Schema drift between models** | One model honours `responseSchema`, another does not | Capability gate excludes non-structured models from structured tasks; validation failure rotates immediately |
 | **Thinking-token cost blowup** | `thinking="high"` on a hot path | Only `rule_draft` uses high. A test asserts no other route can select a high-thinking spec |
@@ -2584,7 +2591,25 @@ def guard(sql: str, tenant_id: str) -> str:
     return tree.sql(dialect="postgres")
 ```
 
-Executed on a **read-only database role** with `statement_timeout = 3000ms`. Three independent layers: the guard, the role, and RLS.
+Executed inside a **read-only transaction** on the RLS-scoped application role,
+with `statement_timeout = 3000ms`. Three independent layers: the guard, the
+read-only transaction, and RLS.
+
+**Correction to the original design.** This section previously named a dedicated
+read-only database *role* as the second layer. On Neon the connection string
+that variable holds points at `neondb_owner`, which carries `rolbypassrls`
+through `neon_superuser` — so using it would have traded RLS away to gain a
+read-only guarantee, leaving one real layer where the text claimed three. The
+mechanism is therefore the RLS-scoped session plus `SET TRANSACTION READ ONLY`;
+`DATABASE_URL_READONLY` is optional hardening, used only when it is set *and*
+differs from `DATABASE_URL`, and `/agent/health` reports which combination is
+actually active rather than leaving it to be assumed.
+
+Each layer is proven to hold on its own:
+`tests/unit/test_llm_sql_guard.py` refuses a `DELETE` with no database at all;
+`tests/integration/test_agent_sql_isolation.py` hands a `DELETE` straight to the
+executor, bypassing the guard, and confirms Postgres refuses it — and separately
+that a query for another tenant's run returns zero rows as `fc_app_user`.
 
 **The model never states a number it did not receive from a query.** Answers render with their SQL collapsibly beneath. When the question is unanswerable from the tables, the model returns `{"answerable": false, "reason": "..."}` and we render the refusal verbatim.
 
@@ -3638,7 +3663,8 @@ Cut from the bottom. Never from the differentiators.
 | Database | Neon Postgres | 16 + pgvector | ✓ |
 | ORM | SQLAlchemy | 2.0 | ✓ |
 | Migrations | Alembic | 1.13+ | ✓ |
-| SQL parsing | sqlglot | latest | ✓ |
+| SQL parsing | sqlglot | 25+ | ✓ |
+| HTTP client | httpx | 0.28+ | ✓ |
 | API | FastAPI | 0.115+ | ✓ |
 | Server | Uvicorn | latest | ✓ |
 | Scheduler | APScheduler | 3.x | ✓ |
@@ -3660,7 +3686,11 @@ Cut from the bottom. Never from the differentiators.
 ```bash
 # Database
 DATABASE_URL=postgresql+asyncpg://...neon.tech/fc?sslmode=require
-DATABASE_URL_READONLY=postgresql+asyncpg://readonly@...   # text-to-SQL role
+# Optional hardening for text-to-SQL, NOT the mechanism (see §7.8). Used only
+# when set AND different from DATABASE_URL: on Neon this string usually names
+# neondb_owner, which carries rolbypassrls and would trade RLS away to gain a
+# read-only guarantee the transaction already provides.
+DATABASE_URL_READONLY=postgresql+asyncpg://readonly@...
 DB_POOL_SIZE=5
 DB_MAX_OVERFLOW=10
 
@@ -3668,7 +3698,7 @@ DB_MAX_OVERFLOW=10
 GEMINI_API_KEY=
 GROQ_API_KEY=
 LLM_MODE=live                     # live | cache_only | off
-LLM_CACHE_DIR=/tmp/fc-llm-cache
+LLM_CACHE_DIR=./.llm-cache
 LLM_CACHE_TTL_DAYS=7
 LLM_MAX_CALLS_PER_RUN=10
 GEMINI_CONTEXT_CACHE_TTL=3600
@@ -3713,6 +3743,29 @@ LOG_LEVEL=INFO
 | Google AI Studio | Pro | ✗ paid since Apr 2026 | ✓ | ✓ | ✓ | ✓ | Not used; nothing needs it |
 | Groq | Llama 3.3 70B | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback (text tasks only) |
 | Vertex AI | Same Gemini lineup | ✗ (credits) | ✓ | ✓ | ✓ | ✓ | Phase 2, for data residency and no-training guarantee |
+
+**Engine runtime dependencies are five, and that list is an enforcement
+mechanism rather than an inventory.** `engine/` declares `pydantic`,
+`python-dotenv`, `pyyaml`, `httpx` and `sqlglot` — nothing else is resolvable
+from that package, so `import sqlalchemy` or `import fastapi` inside the engine
+cannot be written, let alone shipped. `httpx` and `sqlglot` were added for the
+AI layer (§7); one is an HTTP client and the other a SQL parser, and neither can
+open a database connection, so the boundary still holds. A test confines `httpx`
+to `fc/llm/` so that "the engine opens no sockets" stays true of every module
+`make eval` touches.
+
+**The Gemini and Groq adapters are hand-written against the providers' REST
+APIs, not their SDKs.** The router's entire design (§7.2) turns on telling a 429
+carrying `Retry-After` apart from a timeout, a 5xx, a safety block, an auth
+failure and a schema failure, and treating each differently — an SDK folds
+exactly those into its own exception hierarchy, and unwrapping them back to an
+HTTP status is more code than the request builder. Two large transitive
+dependency trees would also make "the engine runs with no network" sound hollow
+even though it stays true, and the layer that has to handle malformed responses
+correctly is the last place to accept `ignore_missing_imports`. Four endpoints
+are used and no others: `models/{model}:generateContent`, `cachedContents`,
+`tools[].functionDeclarations` and Groq's OpenAI-compatible
+`/chat/completions`.
 
 **Note:** the Google AI Pro consumer subscription (including the student offer) raises limits in the Gemini app, Docs, NotebookLM and Code Assist. It does **not** grant Gemini API quota. The API layer is planned as free tier accordingly.
 
@@ -3833,6 +3886,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 
 | Version | Date | Change |
 |---|---|---|
+| 3.3 | 29 Aug 2026 | **AI layer built.** §7.8: the text-to-SQL mechanism is now the RLS-scoped session plus a read-only transaction, not a dedicated read-only role — on Neon that role carries `rolbypassrls`, so the original design would have traded RLS away for a guarantee the transaction already gives, leaving one real layer where the text claimed three; `DATABASE_URL_READONLY` is optional hardening and `/agent/health` reports which layers are active. §7.3: the single-instance caveat now covers the parsed-command store as well as the health tracker (same cause, same fix, same release), and `health_scope: "process"` surfaces it in the API. Appendix A: `httpx` and `sqlglot` added as engine runtime dependencies, with the reasoning for hand-written REST adapters over the provider SDKs — the router's design turns on distinguishing HTTP failure modes that an SDK abstracts away. Appendix B: `LLM_CACHE_DIR` defaults to `./.llm-cache` (the POSIX default resolved to a Windows temp path on the build machine and disagreed with both `.env` files); `DATABASE_URL_READONLY` re-described. §3.7: added `fc/llm/injection.py`, `fc/llm/generate.py`, the `fc/agent/` package, `api/routers/agent.py` and `api/generation.py`. Generator: **scenario 19** seeds prompt-injection text into two real bank narrations so §10.3's detection is exercised against the corpus rather than a fixture. |
 | 1.0 | 27 Aug 2026 | Initial PRD |
 | 2.0 | 27 Aug 2026 | Added full architecture, schemas, API surface, Gemini spec, D6/D7 |
 | 4.0 | 27 Aug 2026 | **BUILD LOCK.** Added §0 Scope Lock: MT940, bulk rule import, cluster editing, embeddings, similar-retrieval and SSO cut. PDF extraction (D6) explicitly retained. All seven differentiators in scope. Lumea merchant profile defined. Schedule revised for solo builder. Emergency cut order added |

@@ -16,6 +16,7 @@ dependencies = [
     "python-multipart>=0.0.32",
     "apscheduler>=3.11.3",
     "resend>=2.42.0",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
@@ -26,7 +27,6 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "types-pyyaml>=6.0.12.20260815",
-    "httpx>=0.28.1",
 ]
 
 [tool.uv.workspace]

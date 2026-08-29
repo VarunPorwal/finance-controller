@@ -11,6 +11,7 @@ same as every other adapter in this codebase already returns them inline.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, UploadFile
@@ -18,14 +19,30 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.audit_log import append_audit
-from api.deps import AuthenticatedUser, current_user, db_session, finish
+from api.deps import (
+    AuthenticatedUser,
+    LLMCallBuffer,
+    current_user,
+    db_session,
+    finish,
+    get_llm_buffer,
+    get_llm_client,
+    persist_llm_calls,
+)
 from api.errors import ApiError
 from db.models import Run, TransactionEventRow
-from fc.ingest.bank_csv import parse_bank_csv
+from fc.ingest.bank_csv import BankIngestResult, parse_bank_csv
+from fc.ingest.bank_pdf import (
+    ExtractionRejected,
+    ExtractionUnavailable,
+    extract_bank_pdf,
+)
+from fc.ingest.detect import detect_bank_format
 from fc.ingest.narration.hdfc import HdfcNarrationParser
 from fc.ingest.razorpay import parse_razorpay_recon
 from fc.ingest.tally import parse_tally_csv
 from fc.ingest.validators import Rejection
+from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory
 from fc.models.transaction import TransactionEvent
 
@@ -168,20 +185,38 @@ async def ingest_bank(
     dry_run: bool = Query(False),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
+    client: LLMClient = Depends(get_llm_client),
+    buffer: LLMCallBuffer = Depends(get_llm_buffer),
 ) -> IngestOut:
     run = await _load_open_run(session, run_id)
-    content = (await file.read()).decode("utf-8")
+    raw = await file.read()
     now = datetime.now(UTC)
     issue_id = deterministic_factory(seed=2, epoch_ms=int(now.timestamp() * 1000))
-    bank_result = parse_bank_csv(
-        content,
-        run_id=run_id,
-        tenant_id=user.tenant_id,
-        narration_parser=HdfcNarrationParser(),
-        opening_balance_paise=opening_balance_paise,
-        issue_id=issue_id,
-        ingested_at=now,
-    )
+
+    # ``detect_bank_format`` has always returned "pdf" for a %PDF- magic
+    # number; this is the branch that finally consumes it (PRD §7.7, D6).
+    if detect_bank_format(raw, file.filename or "") == "pdf":
+        bank_result = await _extract_pdf(
+            raw,
+            run_id=run_id,
+            tenant_id=user.tenant_id,
+            opening_balance_paise=opening_balance_paise,
+            issue_id=issue_id,
+            now=now,
+            client=client,
+            buffer=buffer,
+            session=session,
+        )
+    else:
+        bank_result = parse_bank_csv(
+            raw.decode("utf-8"),
+            run_id=run_id,
+            tenant_id=user.tenant_id,
+            narration_parser=HdfcNarrationParser(),
+            opening_balance_paise=opening_balance_paise,
+            issue_id=issue_id,
+            ingested_at=now,
+        )
     result = bank_result.ingest
     await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
     await append_audit(
@@ -293,3 +328,56 @@ async def ingest_rejections(
     if row is None:
         raise ApiError(404, "not found", f"no run {job_id}")
     return RejectionsOut(job_id=job_id, rejections=[])
+
+
+async def _extract_pdf(
+    raw: bytes,
+    *,
+    run_id: str,
+    tenant_id: str,
+    opening_balance_paise: int,
+    issue_id: Callable[[str], str],
+    now: datetime,
+    client: LLMClient,
+    buffer: LLMCallBuffer,
+    session: AsyncSession,
+) -> BankIngestResult:
+    """PRD §7.7. A model reads the statement; arithmetic decides whether to
+    believe it.
+
+    A broken running balance is a 422 carrying the break rows, and **nothing is
+    persisted** — the raise happens before ``_persist``, so there is no partial
+    write to clean up. ``ProblemDetail`` allows extension members precisely so
+    the breaks can ride along and the user can be shown which row is wrong.
+    """
+    try:
+        extraction = await extract_bank_pdf(
+            raw,
+            client=client,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            narration_parser=HdfcNarrationParser(),
+            opening_balance_paise=opening_balance_paise,
+            issue_id=issue_id,
+            ingested_at=now,
+        )
+    except ExtractionRejected as exc:
+        raise ApiError(
+            422,
+            "extraction rejected",
+            f"The extracted rows do not reconcile against the opening balance, so the "
+            f"extraction was not believed and nothing was saved. {exc}",
+            type_="https://fc.dev/errors/extraction",
+            breaks=[
+                {"row": b.row, "expected_paise": b.expected, "found_paise": b.found}
+                for b in exc.breaks
+            ],
+            row_count=exc.row_count,
+        ) from exc
+    except ExtractionUnavailable as exc:
+        raise ApiError(
+            422, "extraction unavailable", str(exc), type_="https://fc.dev/errors/extraction"
+        ) from exc
+    finally:
+        await persist_llm_calls(session, buffer, tenant_id=tenant_id)
+    return extraction.ingest

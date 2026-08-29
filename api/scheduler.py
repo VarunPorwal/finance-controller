@@ -35,25 +35,47 @@ listing active tenants needs no scope at all.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, text
 
 from api.audit_log import append_audit
-from api.deps import scoped_session
-from api.notify import notify_escalation
+from api.deps import get_llm_client, scoped_session
+from api.notify import (
+    notify_daily_digest,
+    notify_deadline_reminder,
+    notify_escalation,
+)
 from db.models import ExceptionRow, Match, Tenant
 from fc.config import Config
+from fc.models.money import fmt_inr
 
-__all__ = ["build_scheduler", "cache_refresh_job", "keep_alive_job", "recheck_job", "start", "stop"]
+__all__ = [
+    "build_scheduler",
+    "cache_refresh_job",
+    "daily_digest_job",
+    "deadline_reminder_job",
+    "keep_alive_job",
+    "recheck_job",
+    "start",
+    "stop",
+]
 
 _LOG = logging.getLogger("fc.scheduler")
 
 RECHECK_INTERVAL = timedelta(hours=6)
 CACHE_REFRESH_INTERVAL = timedelta(minutes=55)
 KEEP_ALIVE_INTERVAL = timedelta(minutes=4)
+
+#: N4 fires this far ahead of a deadline (§2.5.9).
+_DEADLINE_HORIZON = timedelta(hours=48)
+
+#: The digest and the deadline sweep both mean "still in the queue".
+_OPEN_STATUSES = ("open", "monitoring", "snoozed", "escalated")
 
 _SCHEDULER_ROLE = "system"
 
@@ -147,11 +169,104 @@ async def recheck_job(cfg: Config) -> None:
 
 
 async def cache_refresh_job(cfg: Config) -> None:
-    """Refreshes the Gemini context cache. A no-op until Prompt 9 builds
-    ``fc.llm`` — logged, not silently skipped, so its absence is visible in
-    the scheduler's own logs rather than looking like a job that ran and
-    found nothing to do."""
-    _LOG.info("cache_refresh: no-op — fc.llm is not yet built (Prompt 9)")
+    """Refreshes the Gemini context cache — PRD §7.6.
+
+    Fifty-five minutes against a one-hour TTL, so the cache never lapses
+    between refreshes. The text-to-SQL system prompt carries the schema, the
+    column semantics and twenty worked examples — around 8k tokens reused on
+    every question — so caching it explicitly is most of the input cost of the
+    Ask tab.
+
+    Failure here is not an outage: the calls simply pay full input rate, which
+    is why ``refresh_context_cache`` logs and returns ``None`` rather than
+    raising. In ``cache_only`` or ``off`` mode it does nothing at all.
+    """
+    if cfg.offline:
+        _LOG.info("cache_refresh: skipped (LLM_MODE=%s)", cfg.llm_mode)
+        return
+    name = await get_llm_client().refresh_context_cache()
+    if name is None:
+        _LOG.info("cache_refresh: no cache created; text_to_sql pays full input rate")
+    else:
+        _LOG.info("cache_refresh: text_to_sql context cache is %s", name)
+
+
+async def daily_digest_job(cfg: Config) -> None:
+    """N2 (§2.5.9). One message per tenant: what the queue looks like today.
+
+    Built from counts and sums the database computed, formatted here — there is
+    no model on this path, so a digest is never wrong about a number even when
+    every provider is down.
+    """
+    for tenant_id in await _active_tenant_ids():
+        async with scoped_session(tenant_id, _SCHEDULER_ROLE) as session:
+            rows = (
+                await session.scalars(
+                    select(ExceptionRow).where(ExceptionRow.status.in_(_OPEN_STATUSES))
+                )
+            ).all()
+            if not rows:
+                _LOG.info("daily_digest: nothing open for %s", tenant_id)
+                continue
+            await notify_daily_digest(cfg, summary=_digest(rows))
+
+
+def _digest(rows: Sequence[ExceptionRow]) -> str:
+    by_tier: dict[str, int] = {}
+    by_category: dict[str, int] = {}
+    for row in rows:
+        by_tier[row.tier] = by_tier.get(row.tier, 0) + 1
+        by_category[row.category] = by_category.get(row.category, 0) + 1
+    unexplained = sum(r.residual_paise for r in rows)
+    largest = max(rows, key=lambda r: r.amount_paise)
+    lines = [
+        f"{len(rows)} open items, {fmt_inr(unexplained)} unexplained.",
+        "",
+        "By tier:",
+        *(f"  {tier:<12} {count}" for tier, count in sorted(by_tier.items())),
+        "",
+        "By category:",
+        *(
+            f"  {category:<28} {count}"
+            for category, count in sorted(by_category.items(), key=lambda kv: -kv[1])
+        ),
+        "",
+        f"Largest: {largest.exception_id} — {fmt_inr(largest.amount_paise)} "
+        f"({largest.category.replace('_', ' ')})",
+    ]
+    return "\n".join(lines)
+
+
+async def deadline_reminder_job(cfg: Config) -> None:
+    """N4 (§2.5.9). Forty-eight hours before a consequence lands.
+
+    A chargeback contest window closing is not the kind of thing to learn about
+    on the day. The window itself is computed by ``fc.exceptions.consequence``
+    at classification time; this only reads the date it wrote.
+    """
+    horizon = (datetime.now(UTC) + _DEADLINE_HORIZON).date()
+    today = datetime.now(UTC).date()
+    for tenant_id in await _active_tenant_ids():
+        async with scoped_session(tenant_id, _SCHEDULER_ROLE) as session:
+            due = (
+                await session.scalars(
+                    select(ExceptionRow).where(
+                        ExceptionRow.status.in_(_OPEN_STATUSES),
+                        ExceptionRow.deadline.is_not(None),
+                        ExceptionRow.deadline <= horizon,
+                        ExceptionRow.deadline >= today,
+                    )
+                )
+            ).all()
+            for exc in due:
+                assert exc.deadline is not None
+                await notify_deadline_reminder(
+                    cfg,
+                    exception_id=exc.exception_id,
+                    deadline=exc.deadline,
+                    consequence=exc.consequence or "a deadline on this item is about to pass",
+                    amount_paise=exc.amount_paise,
+                )
 
 
 async def keep_alive_job(cfg: Config) -> None:
@@ -180,6 +295,25 @@ def build_scheduler(cfg: Config) -> AsyncIOScheduler:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    # Daily, at 07:00 UTC — 12:30 IST, which lands in a finance team's morning
+    # rather than overnight. The only cron trigger here; everything else is an
+    # interval, because everything else is about elapsed time, not a time of day.
+    scheduler.add_job(
+        daily_digest_job,
+        CronTrigger(hour=7, minute=0),
+        args=[cfg],
+        id="daily_digest",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        deadline_reminder_job,
+        CronTrigger(hour=7, minute=15),
+        args=[cfg],
+        id="deadline_reminder",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.add_job(
         keep_alive_job,
         IntervalTrigger(seconds=KEEP_ALIVE_INTERVAL.total_seconds()),
@@ -199,7 +333,10 @@ def start(cfg: Config) -> AsyncIOScheduler | None:
         return None
     scheduler = build_scheduler(cfg)
     scheduler.start()
-    _LOG.info("scheduler started: recheck=6h cache_refresh=55m keep_alive=4m")
+    _LOG.info(
+        "scheduler started: recheck=6h cache_refresh=55m keep_alive=4m "
+        "daily_digest=07:00Z deadline_reminder=07:15Z"
+    )
     return scheduler
 
 

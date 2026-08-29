@@ -24,6 +24,7 @@ from api.audit_log import append_audit
 from api.converters import event_from_row, rule_from_row
 from api.deps import AuthenticatedUser, current_user, db_session, finish, get_config
 from api.errors import ApiError
+from api.notify import notify_rule_suggestion
 from db.models import ExceptionRow, TransactionEventRow
 from db.models import Rule as RuleRow
 from fc.config import Config
@@ -397,7 +398,9 @@ async def retire_rule(
 
 @router.get("/suggestions", response_model=list[SuggestionOut])
 async def list_suggestions(
-    session: AsyncSession = Depends(db_session), user: AuthenticatedUser = Depends(current_user)
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+    cfg: Config = Depends(get_config),
 ) -> list[SuggestionOut]:
     """Computed live from resolved exceptions, never persisted — there is no
     ``rule_suggestions`` table in the frozen schema, so a suggestion is a
@@ -427,6 +430,11 @@ async def list_suggestions(
         tenant_id=user.tenant_id,
         created_at=datetime.now(UTC),
     )
+    for draft in drafts:
+        # N3 (§2.5.9). Fires when the learner has something to propose, which
+        # until now nobody was told about — a suggestion that only exists while
+        # somebody is looking at the page is not a suggestion.
+        await notify_rule_suggestion(cfg, rule_name=draft.rule.name, occurrences=draft.occurrences)
     return [
         SuggestionOut(
             rule=d.rule,

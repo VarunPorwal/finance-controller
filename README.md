@@ -90,9 +90,14 @@ This only binds because the API connects as `fc_app_user`, which has no
 correct for migrations and admin work, and it is why the application must never
 use `DATABASE_URL`.
 
-`DATABASE_URL_READONLY`, which the text-to-SQL layer will use, currently points
-at the owner role. It needs its own genuinely read-only role before that layer
-ships.
+`DATABASE_URL_READONLY` is optional hardening, not the mechanism. The
+text-to-SQL path (`/agent/ask`) runs its guarded query inside a
+`SET TRANSACTION READ ONLY` transaction on the RLS-scoped `fc_app_user`
+session, which gives three independent layers today: the sqlglot guard, the
+read-only transaction, and RLS. Pointing that variable at the owner role would
+have traded RLS away to gain a read-only guarantee the transaction already
+provides, so it is used only when it is set *and* differs from `DATABASE_URL`.
+`GET /agent/health` reports which combination is actually active.
 
 ## Status
 

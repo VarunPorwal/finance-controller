@@ -324,6 +324,18 @@ EXTRA_SCENARIOS: tuple[Scenario, ...] = (
         "marketplace_rate_change_midperiod",
         "Marketplace commission rate changes mid-settlement; only effective dating resolves it",
     ),
+    #: PRD §10.3's demo move. A bank credit whose narration carries text
+    #: engineered to steer an automated reader — phrased as operator prose, not
+    #: as "IGNORE ALL PREVIOUS INSTRUCTIONS", because the realistic version is
+    #: the one a person skimming a statement would not catch and is therefore
+    #: the one worth detecting. The money is ordinary and the running balance
+    #: stays continuous: the injection is in the narration and nowhere else, so
+    #: a failure here is unambiguously a detection failure.
+    Scenario(
+        19,
+        "prompt_injection_narration",
+        "Bank narration carrying prompt-injection text shaped like an operator instruction",
+    ),
 )
 
 #: Target case count per scenario at N=500; scaled linearly and floored at 2.
@@ -346,6 +358,7 @@ _BASE_COUNTS: dict[int, int] = {
     16: 5,
     17: 2,
     18: 2,
+    19: 2,
 }
 
 

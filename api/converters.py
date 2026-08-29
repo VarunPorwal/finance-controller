@@ -12,10 +12,13 @@ the seam between a database row and that model.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from db.models import Cluster as ClusterRow
 from db.models import ExceptionRow, TransactionEventRow
 from db.models import Match as MatchRow
 from db.models import Rule as RuleRow
+from fc.llm.injection import scan_narration
 from fc.models.exception_ import Cluster, Exception_, RuleApplicationRef
 from fc.models.match import MatchEvidence, MatchResult
 from fc.models.rule import Deduction, Rule, Scope, Tolerance
@@ -86,8 +89,20 @@ def match_from_row(row: MatchRow) -> MatchResult:
     )
 
 
-def exception_from_row(row: ExceptionRow) -> Exception_:
+def exception_from_row(row: ExceptionRow, *, narrations: Iterable[str | None] = ()) -> Exception_:
+    """Row to model, scanning any narrations the caller supplied (§10.3 layer 6).
+
+    ``narrations`` is optional and defaults to empty, so every existing call
+    site keeps working and simply reports ``suspicious_narration=False``. The
+    endpoints that already load the linked events pass them; the ones that do
+    not are not worth an extra query on a write path, where the flag is not
+    what the caller is asking about.
+    """
+    scans = [scan_narration(n) for n in narrations]
+    patterns = sorted({p for scan in scans for p in scan.patterns})
     return Exception_(
+        suspicious_narration=bool(patterns),
+        suspicious_patterns=patterns,
         exception_id=row.exception_id,
         run_id=row.run_id,
         tenant_id=row.tenant_id,
