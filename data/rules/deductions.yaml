@@ -1,0 +1,233 @@
+# Deduction Rulebook — starter pack. PRD Appendix D, §0.3, §4.1.7.
+#
+# Loaded by fc.rules.loader.load_rules. Every field here is Appendix D's schema;
+# `rate` and `tolerance.percent` are PERCENTAGES (18 means 18%, 0.05 means
+# 0.05%), and every money field is integer paise.
+#
+# Two families, and they apply at different granularities on purpose:
+#
+#   * The `razorpay_mdr_*` rules are scoped `source: razorpay` + `method:`, so
+#     they match one payment row. MDR is charged per transaction at a rate that
+#     depends on how the customer paid, and a settlement batch mixes methods —
+#     there is no single MDR rate for a batch, so there is no batch-level rule.
+#   * The marketplace rules are scoped by counterparty and match the settlement
+#     leg (the bank credit or the Tally receipt, which are the rows that carry
+#     BLINKIT/ZEPTO as the party). A platform commission is one rate across the
+#     whole weekly payout, so the batch is the right unit.
+#
+# Order within `deductions` is significant: bases chain, and `gst_on_fee` reads
+# the `mdr`/`commission` line above it. Swapping two lines is a different rule.
+#
+# `date_from: 2026-04-01` is the start of the Indian fiscal year these rates
+# belong to. Effective dating is real — a June reconciliation replays against
+# June's rates after a July change, and a rule dated 1 April does not touch a
+# 15 March transaction.
+#
+# Rules are immutable per version. To change a rate, add a version N+1 entry
+# with its own date window; do not edit one of these in place (§4.3.6 enforces
+# it in the database, and this file is the thing that database mirrors).
+
+- id: razorpay_mdr_card
+  version: 1
+  name: Razorpay MDR — card
+  description: >-
+    2% MDR on card payments, 18% GST on that MDR, 1% TDS under section 194-O on
+    the gross. PRD §4.1.7.
+  scope:
+    source: razorpay
+    method: card
+    date_from: 2026-04-01
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 2.0
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+- id: razorpay_mdr_netbanking
+  version: 1
+  name: Razorpay MDR — netbanking
+  description: 0.9% MDR on netbanking, 18% GST on the MDR, 1% TDS 194-O.
+  scope:
+    source: razorpay
+    method: netbanking
+    date_from: 2026-04-01
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 0.9
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+- id: razorpay_mdr_upi
+  version: 1
+  name: Razorpay MDR — UPI
+  description: >-
+    UPI carries no MDR, but TDS 194-O still applies to the gross. The zero-rate
+    MDR and GST lines are stated rather than omitted so the stack a human reads
+    matches the stack the other methods produce, and so a future UPI MDR is a
+    rate change rather than a schema change.
+  scope:
+    source: razorpay
+    method: upi
+    date_from: 2026-04-01
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 0.0
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+- id: razorpay_mdr_wallet
+  version: 1
+  name: Razorpay MDR — wallet
+  description: 1.8% MDR on wallet payments, 18% GST on the MDR, 1% TDS 194-O.
+  scope:
+    source: razorpay
+    method: wallet
+    date_from: 2026-04-01
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 1.8
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+- id: razorpay_mdr_emi
+  version: 1
+  name: Razorpay MDR — EMI
+  description: 2.4% MDR on EMI payments, 18% GST on the MDR, 1% TDS 194-O.
+  scope:
+    source: razorpay
+    method: emi
+    date_from: 2026-04-01
+  deductions:
+    - type: mdr
+      basis: gross
+      rate: 2.4
+    - type: gst_on_fee
+      basis: mdr
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 100
+    percent: 0.05
+  priority: 100
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+# --- marketplace, the reason the Rulebook exists (PRD §0.3) ---------------
+#
+# "Whenever it's Blinkit, expect 18% commission plus 18% GST on that fee plus
+# 1% TDS." A named counterparty with its own commission structure is what makes
+# these real rules rather than contrived examples.
+#
+# Priority 200: when a marketplace rule and a generic MDR rule both match a row,
+# the platform's own commercial terms win. Specificity would order these first
+# anyway; the explicit priority says it on purpose rather than by accident.
+
+- id: blinkit_commission
+  version: 3
+  name: Blinkit commission
+  description: >-
+    18% platform commission on gross, 18% GST on that commission, 1% TDS 194-O
+    on gross. Settles weekly, so a payout is one rate across many orders and the
+    batch is the right unit to apply this to. Tolerance is ₹5 rather than ₹1
+    because the platform computes per order and rounds each one, so a rate
+    applied to the batch total misses by a paise per order per line.
+  scope:
+    counterparty_matches: [BLINKIT]
+    date_from: 2026-04-01
+  deductions:
+    - type: commission
+      basis: gross
+      rate: 18.0
+    - type: gst_on_fee
+      basis: commission
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 500
+    percent: 0.05
+  priority: 200
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack
+
+- id: zepto_commission
+  version: 1
+  name: Zepto commission
+  description: >-
+    Same structure as Blinkit at the same headline rate. Written as a separate
+    rule rather than one rule naming both platforms: the rates are equal today
+    and there is no reason to believe they stay equal, and a rate change on one
+    platform must not require editing the other's rule.
+  scope:
+    counterparty_matches: [ZEPTO]
+    date_from: 2026-04-01
+  deductions:
+    - type: commission
+      basis: gross
+      rate: 18.0
+    - type: gst_on_fee
+      basis: commission
+      rate: 18.0
+    - type: tds_194o
+      basis: gross
+      rate: 1.0
+  tolerance:
+    absolute_paise: 500
+    percent: 0.05
+  priority: 200
+  effective_confidence: 0.95
+  origin: manual
+  created_by: system:starter_pack

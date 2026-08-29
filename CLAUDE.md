@@ -136,6 +136,33 @@ target that enforces them.
   match.
 - **Subset-sum with multiple valid subsets returns None**, producing an
   exception. Never pick one.
+- **The Rulebook's gap is not the cascade's gap.** Stage 2 computes a
+  settlement's expected net from its *own* gateway rows, so it already absorbs
+  whatever fee was actually charged and never sees a commission mismatch.
+  `fc/rules/apply.py` answers the question the *books* ask: sales were booked at
+  gross, the bank paid the net, what happened to the difference. Feeding it the
+  cascade's delta instead gives every rule a gap of roughly zero and makes the
+  whole Rulebook look inert.
+- **`Deduction.rate` and `Tolerance.percent` are percentages; `Config.tolerance_pct`
+  is a fraction.** `18` means 18% and `0.05` means 0.05%, per Appendix D — but
+  `tolerance_pct = 0.0005` is multiplied in directly. `rule_tolerance_paise` is
+  the only place that converts. Mixing the two conventions is a 100x tolerance
+  error in whichever direction you get it wrong.
+- **YAML floats never reach a rate.** `yaml.safe_load` turns `rate: 0.9` into a
+  binary float and `Decimal(0.9)` is `0.90000000000000002220446...`.
+  `fc/rules/loader.py` registers a constructor that builds the `Decimal` from the
+  scalar's own text. `fc/rules` is inside the AST money scan, so there is no
+  float *literal* to catch this — the guard is the constructor, not the scan.
+- **The learner's signature bands both amount and gap** (§8.8). Three payouts at
+  ₹40k, ₹71k and ₹1.2L short by the same 22.24% are **not** one pattern: the
+  first two share an `amount_band` and the third does not. That is the spec, not
+  a bug, but it makes fixtures that "obviously" repeat produce no draft at all.
+- **Scenario 18 cannot be closed by one flat rate.** Its orders straddle a
+  mid-period rate change, so the settlement's aggregate rate sits between 18% and
+  20% and any single-rate rule only *shrinks* it. Closing it needs the rule
+  applied per order and the results summed; `fc/rules/scope.py` already picks the
+  right version per date. Ground truth labels these `rule_resolved`, so a future
+  eval harness will score them as missed until that wiring exists.
   - **RLS tests must run as `fc_app_user`, not the owner.** `neondb_owner`
   carries `rolbypassrls` via Neon's `neon_superuser`, so `FORCE ROW LEVEL
   SECURITY` doesn't constrain it. Verifying tenant isolation on the owner

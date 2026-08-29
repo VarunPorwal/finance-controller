@@ -12,14 +12,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fc.models.transaction import Source
 
 __all__ = [
     "Deduction",
     "DeductionBasis",
+    "DeductionStackItem",
     "DeductionType",
+    "Method",
+    "Rail",
     "Rule",
     "RuleApplication",
     "RuleOrigin",
@@ -104,7 +107,15 @@ class Deduction(BaseModel):
 
 
 class Tolerance(BaseModel):
-    """How far off a residual may be and still count as explained (§6.5)."""
+    """How far off a residual may be and still count as explained (§6.5).
+
+    ``percent`` is a **percentage**, the same convention as :attr:`Deduction.rate`
+    — ``Decimal("0.05")`` means 0.05%, not 5%. Both fields come from Appendix D,
+    which names them together, so they read the same way. Note this differs from
+    ``Config.tolerance_pct``, which is a fraction applied directly; the two are
+    never mixed, and :func:`fc.rules.apply.rule_tolerance_paise` is the only
+    place that converts.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -154,7 +165,15 @@ class DeductionStackItem(BaseModel):
 
 
 class RuleApplication(BaseModel):
-    """The result of running one rule against one gap (§6.7)."""
+    """The result of running one rule against one gap (§6.7).
+
+    The invariants below are on the model rather than in
+    :mod:`fc.rules.apply` for the same reason the §6.3 stage ceilings are on
+    ``MatchResult``: this is not the only place a ``RuleApplication`` can be
+    built — the API preview endpoint and the back-test both construct them — and
+    an invariant that depends on every construction site remembering it is a
+    convention, not an invariant.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -170,3 +189,28 @@ class RuleApplication(BaseModel):
     tolerance_paise: int
     effective_confidence: Decimal = Field(ge=Decimal(0), le=Decimal(1))
     arithmetic: str
+
+    @model_validator(mode="after")
+    def _the_arithmetic_closes(self) -> RuleApplication:
+        """What the rule explained plus what it left must be what it was given.
+
+        Every number a human sees on a shrunken exception is one of these three,
+        and a set of three that does not add up is worse than no numbers at all:
+        it reads as a precise account of the money while quietly losing some.
+        """
+        if self.explained_paise + self.residual_paise != self.gap_before_paise:
+            raise ValueError(
+                f"rule {self.rule_id} v{self.version}: explained {self.explained_paise} + "
+                f"residual {self.residual_paise} != gap {self.gap_before_paise}"
+            )
+        if self.outcome == "fully_explained" and abs(self.residual_paise) > self.tolerance_paise:
+            raise ValueError(
+                f"rule {self.rule_id} v{self.version}: outcome is fully_explained but the "
+                f"residual {self.residual_paise} exceeds tolerance {self.tolerance_paise}"
+            )
+        if self.outcome == "not_applicable" and self.explained_paise != 0:
+            raise ValueError(
+                f"rule {self.rule_id} v{self.version}: outcome is not_applicable but it "
+                f"claims to have explained {self.explained_paise}"
+            )
+        return self
