@@ -12,6 +12,10 @@ dependencies = [
     "alembic>=1.13",
     "pgvector>=0.3",
     "python-dotenv>=1.0",
+    "pyjwt>=2.13.0",
+    "python-multipart>=0.0.32",
+    "apscheduler>=3.11.3",
+    "resend>=2.42.0",
 ]
 
 [dependency-groups]
@@ -22,6 +26,7 @@ dev = [
     "mypy>=1.11",
     "ruff>=0.6",
     "types-pyyaml>=6.0.12.20260815",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv.workspace]
@@ -40,6 +45,12 @@ python_version = "3.12"
 strict = true
 namespace_packages = true
 
+# Ships no py.typed marker / stubs; only used from api/scheduler.py, never
+# from anything mypy --strict engine/src actually gates.
+[[tool.mypy.overrides]]
+module = "apscheduler.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -48,6 +59,13 @@ extend-exclude = ["docs", "web"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency-injection idiom is `param: T = Depends(fn)` — the
+# call in the default is how the framework recognises a dependency, not a
+# mutable-default footgun (B008's actual concern), so it is universal in
+# every router and would be noise as a per-line noqa in each one.
+"api/**/*.py" = ["B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["fc", "api", "db"]

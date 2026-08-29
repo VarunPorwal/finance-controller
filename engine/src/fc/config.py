@@ -81,6 +81,16 @@ class Config(BaseModel):
     sentry_dsn: str = ""
     log_level: str = "INFO"
 
+    # Scheduler (api/scheduler.py). Off by default: a background job firing
+    # during `pytest` or an OpenAPI codegen run is exactly the failure mode
+    # this flag exists to rule out. The FastAPI lifespan handler is the
+    # primary gate — importing the app never starts anything on its own —
+    # this is the second, independent one: even a future test harness that
+    # does trigger ASGI lifespan startup (e.g. Starlette's `TestClient` used
+    # as a context manager) still won't start the scheduler unless this is
+    # explicitly set, which only a real deployment's environment does.
+    scheduler_enabled: bool = False
+
     # Tenant
     tenant_id: str = "t_lumea"
 

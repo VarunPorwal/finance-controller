@@ -20,6 +20,7 @@ __all__ = [
     "AUTO_CLOSABLE_STAGES",
     "FUZZY_CONFIDENCE_CAP",
     "GROUPED_ONLY_STAGES",
+    "RULE_CONFIDENCE_CAP",
     "group_confidence_cap",
     "ConfidenceDerivation",
     "MatchEvidence",
@@ -41,7 +42,27 @@ MatchStage = Literal[
 # Hard cap from §6.3: a fuzzy match never auto-closes, whatever it scores.
 FUZZY_CONFIDENCE_CAP = Decimal("0.75")
 
+#: A rule-derived leg is an inference (a rate applied to a gap), not a proven
+#: identity match like exact_ref/fee_adjusted/date_shift/many_to_one — so it
+#: gets the same treatment as fuzzy: a hard ceiling below certainty. The value
+#: mirrors ``Rule.effective_confidence``'s own default and doc comment ("ceiling
+#: this rule can confer" — fc.models.rule), rather than inventing a second
+#: number for the same idea. Before this cap existed, ``stage_confidence_cap``
+#: only special-cased ``"fuzzy"``, so a "rule"-stage leg fell through to the
+#: uncapped ``_ONE`` every proven stage gets — a match built entirely from rule
+#: legs could claim confidence 1.0, which is exactly the guess this system is
+#: supposed to refuse (CLAUDE.md hard rule 4).
+RULE_CONFIDENCE_CAP = Decimal("0.95")
+
 _ONE = Decimal(1)
+
+#: Every capped stage in one place, so :func:`stage_confidence_cap` cannot add
+#: a new ``MatchStage`` member without a caller noticing it fell through to
+#: uncapped by default.
+_STAGE_CONFIDENCE_CAPS: dict[MatchStage, Decimal] = {
+    "fuzzy": FUZZY_CONFIDENCE_CAP,
+    "rule": RULE_CONFIDENCE_CAP,
+}
 
 #: §6.3: fuzzy is absent, and never gains membership.
 AUTO_CLOSABLE_STAGES: frozenset[MatchStage] = frozenset(
@@ -62,8 +83,18 @@ def stage_may_auto_close(stage: MatchStage, *, grouped_by: str | None) -> bool:
 
 
 def stage_confidence_cap(stage: MatchStage) -> Decimal:
-    """The §6.3 ceiling for one leg's stage."""
-    return FUZZY_CONFIDENCE_CAP if stage == "fuzzy" else _ONE
+    """The §6.3 ceiling for one leg's stage.
+
+    The single source of truth every cap in this system reads from —
+    :func:`fc.matching.confidence.cap_for_stage` delegates here rather than
+    keeping its own copy, and :class:`MatchResult`'s validator calls it via
+    :func:`group_confidence_cap`. A stage missing from
+    :data:`_STAGE_CONFIDENCE_CAPS` is uncapped (``1.0``): correct for a proven
+    join-key match, wrong for anything inferential, which is why every
+    inferential stage must have an entry here rather than relying on this
+    function's default.
+    """
+    return _STAGE_CONFIDENCE_CAPS.get(stage, _ONE)
 
 
 def group_confidence_cap(legs: Iterable[MatchEvidence]) -> Decimal:

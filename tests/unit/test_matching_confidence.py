@@ -13,7 +13,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from fc.matching.confidence import ConfidenceInputs, cap_for_stage, derive
-from fc.models.match import FUZZY_CONFIDENCE_CAP
+from fc.models.match import FUZZY_CONFIDENCE_CAP, RULE_CONFIDENCE_CAP
 
 _QUANTUM = Decimal("0.0001")
 
@@ -94,6 +94,16 @@ def test_the_bonus_is_load_bearing_when_it_actually_moves_the_number() -> None:
 def test_fuzzy_is_capped_by_assertion_whatever_it_scores() -> None:
     assert cap_for_stage("fuzzy", Decimal("0.99")) == FUZZY_CONFIDENCE_CAP
     assert cap_for_stage("exact_ref", Decimal("0.99")) == Decimal("0.99")
+
+
+def test_rule_is_capped_too_not_just_fuzzy() -> None:
+    """Carried bug: cap_for_stage used to hardcode only "fuzzy", so a "rule"
+    leg fell through to the uncapped exact_ref/date_shift/... treatment. The
+    cap now comes from fc.models.match.stage_confidence_cap, the same source
+    MatchResult's own validator uses, so the two can never disagree again."""
+    assert cap_for_stage("rule", Decimal("0.99")) == RULE_CONFIDENCE_CAP
+    assert cap_for_stage("rule", RULE_CONFIDENCE_CAP) == RULE_CONFIDENCE_CAP
+    assert cap_for_stage("rule", Decimal("0.10")) == Decimal("0.10")
 
 
 @given(

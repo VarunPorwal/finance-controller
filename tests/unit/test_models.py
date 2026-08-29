@@ -28,6 +28,7 @@ from fc.models import (
     deterministic_factory,
     new_ulid,
 )
+from fc.models.match import RULE_CONFIDENCE_CAP, stage_confidence_cap
 
 # PRD §4.2, in order.
 EXPECTED_FIELDS = (
@@ -153,6 +154,70 @@ def test_match_confidence_is_bounded() -> None:
             stage="exact_ref",
             confidence=Decimal("1.5"),
             evidence=[MatchEvidence(stage="exact_ref")],
+            created_at=datetime(2026, 8, 15, tzinfo=UTC),
+        )
+
+
+def test_rule_stage_confidence_is_capped_below_certainty() -> None:
+    """A rule-derived leg is an inference, not a proven identity match, so it
+    gets the same treatment as fuzzy: a hard ceiling below 1.0. Before this
+    fix, ``stage_confidence_cap`` only special-cased "fuzzy" and a match built
+    entirely from "rule" legs could claim confidence 1.0 — the exact guess
+    hard rule 4 exists to refuse."""
+    assert stage_confidence_cap("rule") == RULE_CONFIDENCE_CAP
+    assert RULE_CONFIDENCE_CAP < Decimal("1.0")
+
+
+def test_a_rule_stage_match_above_the_rule_cap_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        MatchResult(
+            match_id="m_1",
+            run_id="run_1",
+            tenant_id="t_lumea",
+            group_key="grp_1",
+            event_ids=["evt_1"],
+            sources_covered=["razorpay"],
+            stage="rule",
+            confidence=RULE_CONFIDENCE_CAP + Decimal("0.01"),
+            evidence=[MatchEvidence(stage="rule", rule_id="blinkit_commission")],
+            created_at=datetime(2026, 8, 15, tzinfo=UTC),
+        )
+
+
+def test_a_rule_stage_match_at_exactly_the_cap_is_accepted() -> None:
+    match = MatchResult(
+        match_id="m_1",
+        run_id="run_1",
+        tenant_id="t_lumea",
+        group_key="grp_1",
+        event_ids=["evt_1"],
+        sources_covered=["razorpay"],
+        stage="rule",
+        confidence=RULE_CONFIDENCE_CAP,
+        evidence=[MatchEvidence(stage="rule", rule_id="blinkit_commission")],
+        created_at=datetime(2026, 8, 15, tzinfo=UTC),
+    )
+    assert match.confidence == RULE_CONFIDENCE_CAP
+
+
+def test_a_group_mixing_rule_and_exact_ref_legs_is_capped_by_the_rule_leg() -> None:
+    """A group is only as provable as its weakest leg — an exact_ref leg
+    extended with a rule-derived one must not inherit the proven leg's
+    uncapped ceiling."""
+    with pytest.raises(ValidationError):
+        MatchResult(
+            match_id="m_1",
+            run_id="run_1",
+            tenant_id="t_lumea",
+            group_key="grp_1",
+            event_ids=["evt_1", "evt_2"],
+            sources_covered=["razorpay", "bank"],
+            stage="exact_ref",
+            confidence=Decimal("0.99"),
+            evidence=[
+                MatchEvidence(stage="exact_ref"),
+                MatchEvidence(stage="rule", rule_id="blinkit_commission"),
+            ],
             created_at=datetime(2026, 8, 15, tzinfo=UTC),
         )
 

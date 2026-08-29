@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from fc.models.match import FUZZY_CONFIDENCE_CAP, ConfidenceDerivation, MatchStage
+from fc.models.match import ConfidenceDerivation, MatchStage, stage_confidence_cap
 
 __all__ = [
     "DATE_PENALTY_PER_DAY",
@@ -100,14 +100,17 @@ def derive(inputs: ConfidenceInputs) -> DerivationOutcome:
 def cap_for_stage(stage: MatchStage, value: Decimal) -> Decimal:
     """Apply the §6.3 per-stage ceiling.
 
-    A fuzzy match never auto-closes whatever it scores, and the assertion is
-    here rather than in the stage so stage 5 cannot be written without it.
+    Delegates to :func:`fc.models.match.stage_confidence_cap` — the same
+    function ``MatchResult``'s own validator uses — rather than keeping a
+    second, independently-maintained copy of which stages are capped. A
+    stage added there is capped here automatically; one hardcoded only in
+    this module (as ``"fuzzy"`` alone used to be, silently leaving ``"rule"``
+    uncapped) is a cap that only holds until the next stage is added.
     """
-    if stage == "fuzzy":
-        capped = min(value, FUZZY_CONFIDENCE_CAP)
-        assert capped <= FUZZY_CONFIDENCE_CAP, "fuzzy confidence exceeded its hard cap"
-        return capped
-    return value
+    cap = stage_confidence_cap(stage)
+    capped = min(value, cap)
+    assert capped <= cap, f"{stage!r} confidence exceeded its hard cap {cap}"
+    return capped
 
 
 def _ratio(numerator: int, denominator: int, when_undefined: int = 1) -> Decimal:

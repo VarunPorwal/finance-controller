@@ -1,27 +1,96 @@
-"""FastAPI application entrypoint.
+"""FastAPI application — PRD §5. CORS restricted to the exact frontend
+origin (never ``*``): a wildcard would defeat the point of Bearer auth, since
+any origin could then read the response of an authenticated request.
 
-Routers land in a later prompt (PRD §5). Routers validate, call the engine and
-serialise; no business logic lives in ``api/routers/``.
+``python -m api.main --openapi`` prints the OpenAPI document to stdout and
+exits, which is what ``scripts/dev.ps1``'s ``client`` target pipes into
+``openapi-typescript`` to regenerate ``web/lib/api.ts``.
+
+The scheduler starts from ``lifespan`` below, which only runs on a real ASGI
+``startup`` event — not on module import, and not under this repo's own
+httpx/``ASGITransport`` test transport, which never sends that event. See
+``api/scheduler.py``'s module docstring for the second, independent gate.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import json
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from api import scheduler as scheduler_module
 from api.deps import get_config
+from api.errors import register_exception_handlers
+from api.routers import (
+    audit,
+    auth,
+    cash,
+    clusters,
+    events,
+    exceptions,
+    ingest,
+    matches,
+    meta,
+    rules,
+    runs,
+)
+from api.routers import eval as eval_router
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    running = scheduler_module.start(get_config())
+    try:
+        yield
+    finally:
+        scheduler_module.stop(running)
+
 
 app = FastAPI(
     title="AI Finance Controller",
     version="0.1.0",
-    description="Reconciles Razorpay settlements, Indian bank statements and Tally ledgers.",
+    description="Reconciles Razorpay settlements, bank statements and Tally ledger exports.",
+    lifespan=lifespan,
 )
 
+register_exception_handlers(app)
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    config = get_config()
-    return {
-        "status": "ok",
-        "environment": config.environment,
-        "llm_mode": config.llm_mode,
-    }
+_cfg = get_config()
+if _cfg.frontend_origin:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[_cfg.frontend_origin],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.include_router(meta.router)
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(runs.router, prefix="/api/v1")
+app.include_router(ingest.router, prefix="/api/v1")
+app.include_router(events.router, prefix="/api/v1")
+app.include_router(matches.router, prefix="/api/v1")
+app.include_router(exceptions.router, prefix="/api/v1")
+app.include_router(clusters.router, prefix="/api/v1")
+app.include_router(rules.router, prefix="/api/v1")
+app.include_router(cash.router, prefix="/api/v1")
+app.include_router(audit.router, prefix="/api/v1")
+app.include_router(eval_router.router, prefix="/api/v1")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--openapi" in args:
+        json.dump(app.openapi(), sys.stdout, indent=2)
+        return 0
+    print("usage: python -m api.main --openapi", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
