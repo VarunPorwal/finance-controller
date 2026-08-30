@@ -127,9 +127,14 @@ class TransactionEventRow(Base):
             "settlement_id",
             postgresql_where=sa.text("settlement_id IS NOT NULL"),
         ),
+        # Scoped to the run, not the tenant (migration 0002). A voucher_guid is
+        # unique within a Tally day book, not across every run a tenant will ever
+        # do — PRD §Idempotency names (run_id, source, source_row_id) as the
+        # mechanism, and source_row_id *is* the voucher_guid for Tally. Widening
+        # this back to tenant_id is what made every re-upload a 500.
         sa.Index(
             "ix_te_guid",
-            "tenant_id",
+            "run_id",
             "voucher_guid",
             unique=True,
             postgresql_where=sa.text("voucher_guid IS NOT NULL"),

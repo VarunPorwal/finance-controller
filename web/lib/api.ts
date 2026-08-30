@@ -228,6 +228,19 @@ export interface paths {
          *     (the caller-specified target; PRD §5.3's ``ruleset_version`` selects a
          *     hash this build resolves to "whatever is active now", since there is no
          *     UI yet to pick an arbitrary historical version by hash).
+         *
+         *     The input never changes, so nothing about it is re-persisted:
+         *     ``_persist_pipeline_result`` runs with ``persist_events=False`` exactly
+         *     as ``finalize_run`` does. Two independent constraints make a second copy
+         *     impossible even if it were desired — ``transaction_events.event_id`` is
+         *     a bare primary key (one row per event, ever, not per run) and
+         *     ``ix_te_guid`` treats a ledger voucher as booked at most once per tenant
+         *     — so the new run's exceptions simply cite the parent run's own
+         *     ``event_id`` values. ``diff_exceptions`` depends on exactly this: it
+         *     matches "the same underlying transaction" across two runs by comparing
+         *     ``event_ids`` verbatim (see ``fc.audit.replay``'s module docstring), so
+         *     reusing them rather than minting fresh ones is what keeps the diff
+         *     correct, not an oversight to fix later.
          */
         post: operations["replay_run_api_v1_runs__run_id__replay_post"];
         delete?: never;
@@ -1862,6 +1875,11 @@ export interface components {
             run_id: string;
             /** Event Count */
             event_count: number;
+            /**
+             * Deduplicated
+             * @default 0
+             */
+            deduplicated: number;
             /** Rejections */
             rejections: components["schemas"]["RejectionOut"][];
             /** Balanced */

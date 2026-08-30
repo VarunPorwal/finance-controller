@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, UploadFile
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.audit_log import append_audit
@@ -48,6 +49,10 @@ from fc.models.transaction import TransactionEvent
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
+#: Rows per INSERT. 34 columns x 500 = 17k bind parameters, well under
+#: PostgreSQL's 65535 ceiling.
+_INSERT_CHUNK = 500
+
 
 class RejectionOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -70,6 +75,11 @@ class IngestOut(BaseModel):
 
     run_id: str
     event_count: int
+    #: Rows the adapter parsed cleanly that were already present in this run and
+    #: so were not inserted again. PRD §Idempotency: "(run_id, source,
+    #: source_row_id) makes re-upload safe by construction" — this is the count
+    #: that guarantee skipped. Non-zero is normal on a repeat submit, not an error.
+    deduplicated: int = 0
     rejections: list[RejectionOut]
     #: Bank rows only (PRD §6.1/§7.7) — ``None`` for razorpay/ledger, where
     #: there is no running balance to check. A CSV statement that fails this
@@ -118,45 +128,74 @@ async def _load_open_run(session: AsyncSession, run_id: str) -> Run:
 
 async def _persist(
     session: AsyncSession, *, run: Run, tenant_id: str, events: tuple[TransactionEvent, ...]
-) -> None:
-    for event in events:
-        session.add(
-            TransactionEventRow(
-                event_id=event.event_id,
-                run_id=run.run_id,
-                tenant_id=tenant_id,
-                source=event.source,
-                source_row_id=event.source_row_id,
-                amount_paise=event.amount_paise,
-                direction=event.direction,
-                currency=event.currency,
-                txn_date=event.txn_date,
-                value_date=event.value_date,
-                settled_at=event.settled_at,
-                utr=event.utr,
-                rrn=event.rrn,
-                settlement_id=event.settlement_id,
-                order_id=event.order_id,
-                payment_id=event.payment_id,
-                voucher_number=event.voucher_number,
-                voucher_guid=event.voucher_guid,
-                counterparty=event.counterparty,
-                counterparty_norm=event.counterparty_norm,
-                method=event.method,
-                rail=event.rail,
-                txn_type=event.txn_type,
-                raw_narration=event.raw_narration,
-                fee_paise=event.fee_paise,
-                tax_paise=event.tax_paise,
-                on_hold=event.on_hold,
-                ledger_account=event.ledger_account,
-                voucher_type=event.voucher_type,
-                raw=event.raw,
-                ingested_at=event.ingested_at,
-            )
+) -> int:
+    """Insert the parsed events, skipping any this run already holds.
+
+    Returns the number of rows actually inserted; ``len(events) - result`` is
+    the deduplicated count.
+
+    ``ON CONFLICT DO NOTHING`` with no conflict target covers both unique
+    constraints on the table — ``uq_te_run_source_row`` and ``ix_te_guid``,
+    which since migration 0002 are both run-scoped. This is the half of Tally
+    idempotency that lives in code: the index decides what "the same row" means,
+    this decides that meeting one is a no-op rather than a 500. Before it, a
+    re-submitted day book raised ``UniqueViolationError`` out of ``flush()`` and
+    the API turned it into "an unexpected error occurred".
+
+    Chunked because a single multi-VALUES insert of a large corpus would exceed
+    PostgreSQL's 65535 bind-parameter limit: 34 columns puts the ceiling near
+    1900 rows, and 500 leaves comfortable headroom.
+    """
+    inserted = 0
+    rows = [
+        {
+            "event_id": event.event_id,
+            "run_id": run.run_id,
+            "tenant_id": tenant_id,
+            "source": event.source,
+            "source_row_id": event.source_row_id,
+            "amount_paise": event.amount_paise,
+            "direction": event.direction,
+            "currency": event.currency,
+            "txn_date": event.txn_date,
+            "value_date": event.value_date,
+            "settled_at": event.settled_at,
+            "utr": event.utr,
+            "rrn": event.rrn,
+            "settlement_id": event.settlement_id,
+            "order_id": event.order_id,
+            "payment_id": event.payment_id,
+            "voucher_number": event.voucher_number,
+            "voucher_guid": event.voucher_guid,
+            "counterparty": event.counterparty,
+            "counterparty_norm": event.counterparty_norm,
+            "method": event.method,
+            "rail": event.rail,
+            "txn_type": event.txn_type,
+            "raw_narration": event.raw_narration,
+            "fee_paise": event.fee_paise,
+            "tax_paise": event.tax_paise,
+            "on_hold": event.on_hold,
+            "ledger_account": event.ledger_account,
+            "voucher_type": event.voucher_type,
+            "raw": event.raw,
+            "ingested_at": event.ingested_at,
+        }
+        for event in events
+    ]
+    for start in range(0, len(rows), _INSERT_CHUNK):
+        chunk = rows[start : start + _INSERT_CHUNK]
+        stmt = (
+            pg_insert(TransactionEventRow)
+            .values(chunk)
+            .on_conflict_do_nothing()
+            .returning(TransactionEventRow.event_id)
         )
-    run.record_count = (run.record_count or 0) + len(events)
+        inserted += len((await session.execute(stmt)).scalars().all())
+
+    run.record_count = (run.record_count or 0) + inserted
     await session.flush()
+    return inserted
 
 
 @router.post("/razorpay", response_model=IngestOut)
@@ -174,7 +213,7 @@ async def ingest_razorpay(
     result = parse_razorpay_recon(
         raw, run_id=run_id, tenant_id=user.tenant_id, issue_id=issue_id, ingested_at=now
     )
-    await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -183,8 +222,9 @@ async def ingest_razorpay(
         subject_type="run",
         subject_id=run_id,
         payload={
-            "event_count": len(result.events),
+            "event_count": inserted,
             "rejection_count": len(result.rejections),
+            "deduplicated": len(result.events) - inserted,
             "dry_run": dry_run,
         },
         created_at=now,
@@ -193,7 +233,8 @@ async def ingest_razorpay(
     await finish(session, dry_run=dry_run)
     return IngestOut(
         run_id=run_id,
-        event_count=len(result.events),
+        event_count=inserted,
+        deduplicated=len(result.events) - inserted,
         rejections=[_rejection_out(r) for r in result.rejections],
     )
 
@@ -239,7 +280,7 @@ async def ingest_bank(
             ingested_at=now,
         )
     result = bank_result.ingest
-    await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -248,8 +289,9 @@ async def ingest_bank(
         subject_type="run",
         subject_id=run_id,
         payload={
-            "event_count": len(result.events),
+            "event_count": inserted,
             "rejection_count": len(result.rejections),
+            "deduplicated": len(result.events) - inserted,
             "balanced": bank_result.balanced,
             "dry_run": dry_run,
         },
@@ -259,7 +301,8 @@ async def ingest_bank(
     await finish(session, dry_run=dry_run)
     return IngestOut(
         run_id=run_id,
-        event_count=len(result.events),
+        event_count=inserted,
+        deduplicated=len(result.events) - inserted,
         rejections=[_rejection_out(r) for r in result.rejections],
         balanced=bank_result.balanced,
         breaks=[_break_out(b) for b in bank_result.breaks],
@@ -281,7 +324,7 @@ async def ingest_ledger(
     result = parse_tally_csv(
         content, run_id=run_id, tenant_id=user.tenant_id, issue_id=issue_id, ingested_at=now
     )
-    await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -290,8 +333,9 @@ async def ingest_ledger(
         subject_type="run",
         subject_id=run_id,
         payload={
-            "event_count": len(result.events),
+            "event_count": inserted,
             "rejection_count": len(result.rejections),
+            "deduplicated": len(result.events) - inserted,
             "dry_run": dry_run,
         },
         created_at=now,
@@ -300,7 +344,8 @@ async def ingest_ledger(
     await finish(session, dry_run=dry_run)
     return IngestOut(
         run_id=run_id,
-        event_count=len(result.events),
+        event_count=inserted,
+        deduplicated=len(result.events) - inserted,
         rejections=[_rejection_out(r) for r in result.rejections],
     )
 
