@@ -343,6 +343,32 @@ async def create_run(
     buffer: LLMCallBuffer = Depends(get_llm_buffer),
 ) -> RunOut:
     started_at = datetime.now(UTC)
+
+    if body.mode == "demo":
+        # `fc.eval.corpus.load_corpus()` always returns the exact same
+        # content — same event ids, same `voucher_guid`s and other
+        # source-content fields, several of which carry a *global* unique
+        # index (`ix_te_guid`: real idempotency, the same physical voucher
+        # must not double-book). So the demo corpus can be inserted at most
+        # once, ever, per tenant — a second "Run demo corpus" click cannot
+        # create an independent second run of it, because there is no second
+        # copy of the data to run one over. Rather than fail on the insert,
+        # short-circuit here: if it is already loaded, hand back that run
+        # untouched (no new row, no re-run) instead of pretending a fresh
+        # run happened. Keyed on the first event's own `(source,
+        # source_row_id)`, which is stable source content, unlike `event_id`.
+        anchor = load_corpus().events[0]
+        existing_anchor = await session.scalar(
+            select(TransactionEventRow).where(
+                TransactionEventRow.tenant_id == user.tenant_id,
+                TransactionEventRow.source == anchor.source,
+                TransactionEventRow.source_row_id == anchor.source_row_id,
+            )
+        )
+        if existing_anchor is not None:
+            existing_run = await _load(session, existing_anchor.run_id)
+            return _run_out(existing_run)
+
     run_id = new_ulid("run_")
     ruleset = load_rules(DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=started_at)
     issue_id = deterministic_factory(seed=body.seed, epoch_ms=int(started_at.timestamp() * 1000))
@@ -388,9 +414,20 @@ async def create_run(
         await finish(session, dry_run=dry_run)
         return result_out
 
+    # Reached only for mode="demo" with the corpus not already loaded (the
+    # already-loaded case returned above). `event_id` is still remapped to
+    # this call's own `issue_id` rather than trusting `load_corpus()`'s
+    # fixed-seed ids verbatim — belt and suspenders for the same collision,
+    # in case a row with a matching anchor was deleted without deleting the
+    # rest (nothing in this codebase does that today, but the cost of
+    # assuming it can't happen is a much less legible crash than this one
+    # kept being).
     corpus = load_corpus()
+    events = tuple(
+        event.model_copy(update={"event_id": issue_id("evt_")}) for event in corpus.events
+    )
     result = run_pipeline(
-        corpus.events,
+        events,
         cfg=cfg,
         rules=ruleset.rules,
         run_id=run_id,

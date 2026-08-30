@@ -13,7 +13,12 @@ services:
     plan: free
     region: singapore
     branch: main
-    buildCommand: pip install uv && uv sync --frozen
+    # `data/generated/` is gitignored (it's build output, not source) and
+    # so never reaches Render on its own — the "Run demo corpus" button
+    # calls fc.eval.corpus.load_corpus(), which reads it straight off disk.
+    # SEED=42 N=500 matches the values `make generate`/CI use, so the demo
+    # corpus here is byte-identical to the one used locally and in CI.
+    buildCommand: pip install uv && uv sync --frozen && SEED=42 N=500 uv run python -m fc.generator.seed
     startCommand: uv run alembic upgrade head && uv run uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

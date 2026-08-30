@@ -46,23 +46,42 @@ export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; o
   async function runDemoCorpus() {
     setDemoRunning(true);
     setDemoError(null);
-    const { error } = await apiClient.POST("/api/v1/runs", { body: { mode: "demo", seed: 7 } });
-    setDemoRunning(false);
-    if (error) {
-      setDemoError("Could not start the demo run.");
-      return;
+    // try/finally, not just an `error` check: a thrown network error (a
+    // dropped connection, an unparseable body) must still clear the
+    // loading flag — otherwise the button spins forever instead of
+    // showing a message, which is worse than any error text.
+    try {
+      const { error, response } = await apiClient.POST("/api/v1/runs", {
+        body: { mode: "demo", seed: 7 },
+      });
+      if (error) {
+        const detail =
+          error && typeof error === "object" && "detail" in error
+            ? String((error as { detail?: unknown }).detail)
+            : `request failed (${response.status})`;
+        setDemoError(detail);
+        return;
+      }
+      onComplete();
+    } catch {
+      setDemoError("Could not reach the API.");
+    } finally {
+      setDemoRunning(false);
     }
-    onComplete();
   }
 
   async function ensureRun(): Promise<string | null> {
     if (runId) return runId;
-    const { data, error } = await apiClient.POST("/api/v1/runs", {
-      body: { mode: "empty", seed: 7 },
-    });
-    if (error || !data) return null;
-    setRunId(data.run_id);
-    return data.run_id;
+    try {
+      const { data, error } = await apiClient.POST("/api/v1/runs", {
+        body: { mode: "empty", seed: 7 },
+      });
+      if (error || !data) return null;
+      setRunId(data.run_id);
+      return data.run_id;
+    } catch {
+      return null;
+    }
   }
 
   async function uploadSlot(source: Source, file: File) {
@@ -93,31 +112,46 @@ export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; o
     // has no multipart form-data path to call instead.
     const token = process.env.NEXT_PUBLIC_DEMO_TOKEN ?? "";
     const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-    const res = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      body,
-    });
 
-    if (res.ok) {
-      const data = (await res.json()) as IngestOut;
-      setSlots((prev) => ({
-        ...prev,
-        [source]: { fileName: file.name, loading: false, result: data, error: null },
-      }));
-    } else {
-      const problem = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+    try {
+      const res = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body,
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as IngestOut;
+        setSlots((prev) => ({
+          ...prev,
+          [source]: { fileName: file.name, loading: false, result: data, error: null },
+        }));
+      } else {
+        const problem = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        setSlots((prev) => ({
+          ...prev,
+          [source]: {
+            fileName: file.name,
+            loading: false,
+            result: null,
+            error: {
+              detail: problem.detail ?? `HTTP ${res.status}`,
+              breaks: problem.breaks,
+              rowCount: problem.row_count,
+            },
+          },
+        }));
+      }
+    } catch {
+      // A thrown network error must still clear `loading` — the same
+      // reasoning as runDemoCorpus's try/finally.
       setSlots((prev) => ({
         ...prev,
         [source]: {
           fileName: file.name,
           loading: false,
           result: null,
-          error: {
-            detail: problem.detail ?? `HTTP ${res.status}`,
-            breaks: problem.breaks,
-            rowCount: problem.row_count,
-          },
+          error: { detail: "Could not reach the API." },
         },
       }));
     }
@@ -127,15 +161,22 @@ export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; o
     if (!runId) return;
     setFinalizing(true);
     setFinalizeError(null);
-    const { error } = await apiClient.POST("/api/v1/runs/{run_id}/finalize", {
-      params: { path: { run_id: runId } },
-    });
-    setFinalizing(false);
-    if (error) {
-      setFinalizeError("Could not reconcile — check that at least one source ingested cleanly.");
-      return;
+    try {
+      const { error } = await apiClient.POST("/api/v1/runs/{run_id}/finalize", {
+        params: { path: { run_id: runId } },
+      });
+      if (error) {
+        setFinalizeError(
+          "Could not reconcile — check that at least one source ingested cleanly.",
+        );
+        return;
+      }
+      onComplete();
+    } catch {
+      setFinalizeError("Could not reach the API.");
+    } finally {
+      setFinalizing(false);
     }
-    onComplete();
   }
 
   const anyIngested = Object.values(slots).some((s) => s.result && s.result.event_count > 0);
