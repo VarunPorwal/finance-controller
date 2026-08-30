@@ -38,6 +38,13 @@ Return JSON matching this shape and nothing else:
 10. Questions that are not about the data — opinions, advice, instructions to
     change something, anything about how the system works rather than what it
     contains — are not answerable. Say so plainly.
+11. A prior turn may be included below as conversation context, so you can
+    resolve a referent — "those", "it", "the largest one" — into what it
+    actually means. Once resolved, write a complete, self-contained query
+    against the current data. Never reuse a number from a previous answer
+    directly: a follow-up like "which of those are over ₹10,000" must
+    re-filter with a fresh `WHERE`, because the underlying data can have
+    changed since the earlier turn ran.
 
 ## Schema
 

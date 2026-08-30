@@ -24,6 +24,7 @@ one re-parse.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
@@ -36,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.audit_log import append_audit
+from api.converters import exception_from_row
 from api.deps import (
     AuthenticatedUser,
     LLMCallBuffer,
@@ -53,7 +55,7 @@ from api.errors import ApiError
 from api.routers import exceptions as exceptions_router
 from api.routers import rules as rules_router
 from db.models import Cluster as ClusterRow
-from db.models import ExceptionRow, TransactionEventRow
+from db.models import ExceptionRow, Run, TransactionEventRow
 from fc.agent.permissions import can, roles_permitting
 from fc.agent.validator import (
     CommandContext,
@@ -62,10 +64,12 @@ from fc.agent.validator import (
     RefCandidate,
     validate,
 )
+from fc.audit.replay import ReplayDiff, diff_exceptions
 from fc.config import Config
 from fc.llm.client import LLMClient, load_prompt
+from fc.llm.grounding import is_grounded
 from fc.llm.injection import sanitise, scan_narration, wrap_untrusted
-from fc.llm.schemas import FUNCTIONS, STRUCTURED, SqlPlan
+from fc.llm.schemas import FUNCTIONS, STRUCTURED, NarrativeOut, SqlPlan
 from fc.llm.sql_guard import MAX_ROWS, SqlRejected, guard
 from fc.models.command import CUT_VERBS, CommandPayload, ParsedCommand
 from fc.models.ids import new_ulid
@@ -319,11 +323,24 @@ class ExecuteOut(BaseModel):
     excluded: list[AppliedOut] = []
 
 
+class AskTurnIn(BaseModel):
+    """One prior turn, supplied by the client — the server keeps no
+    conversation state (PRD §3.7 has no session table, and CLAUDE.md forbids
+    a schema change to add one). The client sends the last 5; the server
+    caps it there too, defence in depth."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    answer: str
+
+
 class AskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str
     run_id: str | None = None
+    history: list[AskTurnIn] = []
 
 
 class AskOut(BaseModel):
@@ -331,9 +348,21 @@ class AskOut(BaseModel):
 
     answerable: bool
     answer: str | None = None
+    #: Which tool answered — "sql" (a guarded SELECT) or "diff" (a run
+    #: comparison via fc.audit.replay.diff_exceptions). Logged so "which
+    #: tool answered" is visible without re-deriving it from the SQL field's
+    #: presence.
+    tool: str | None = None
     sql: str | None = None
     rows: list[dict[str, Any]] = []
     row_count: int = 0
+    #: True when the evidence is worth rendering as a table — a list request
+    #: or more than a handful of rows. False means the prose in `answer` is
+    #: the whole answer; the rows are still attached for "how I got this."
+    show_table: bool = False
+    #: Set only for tool="diff" — which two runs were compared.
+    compared_from_run_id: str | None = None
+    compared_to_run_id: str | None = None
     refusal_reason: str | None = None
     model_used: str | None = None
     cached: bool = False
@@ -1171,6 +1200,56 @@ async def _event_for_ref(session: AsyncSession, ref: str) -> str:
 
 # --- POST /agent/ask ---------------------------------------------------------
 
+#: Deterministic tool routing (PRD: "a count query gives '46 then, 44 now';
+#: the diff gives which specific items moved"). Not a classification LLM
+#: call — that would spend exactly the quota this exists to save, and the
+#: phrasing that signals "compare two runs" is narrow enough that a keyword
+#: match is the honest tool for the job, not a shortcut around one.
+_DIFF_INTENT = re.compile(
+    r"\b(what'?s? changed|what changed|since yesterday|since the last run|"
+    r"compare|comparison|vs\.?\s+last|versus\s+last|difference between|"
+    r"diff between|compared to (the )?(last|previous) run)\b",
+    re.IGNORECASE,
+)
+_YESTERDAY = re.compile(r"\byesterday\b", re.IGNORECASE)
+
+#: A single aggregate ("how much", "how many", "total") needs no more than
+#: Flash-Lite; anything with a second clause, a comparison or a breakdown
+#: goes to the standard tier first instead. A follow-up always uses the
+#: standard tier too — resolving a referent from conversation history is not
+#: the "simple" case this exists for.
+_SIMPLE_LOOKUP = re.compile(
+    r"^(how (much|many)|what('?s| is) the (total|count|sum)|total|count)\b", re.IGNORECASE
+)
+_COMPLEX_HINT = re.compile(
+    r"\b(compare|breakdown|break down|group by|top \d|and (also|which))\b", re.IGNORECASE
+)
+_LIST_REQUEST = re.compile(
+    r"\b(list|show me|which (ones|are)|give me (a|the) list)\b", re.IGNORECASE
+)
+
+#: PRD §13.5: auto-resolved items collapse below the fold; a table earns its
+#: place only past this many rows or an explicit ask for a list.
+_TABLE_ROW_THRESHOLD = 8
+
+
+def _wants_diff(question: str) -> bool:
+    return bool(_DIFF_INTENT.search(question))
+
+
+def _is_simple_lookup(question: str, history: Sequence[AskTurnIn]) -> bool:
+    if history or _COMPLEX_HINT.search(question):
+        return False
+    return len(question.split()) <= 12 and bool(_SIMPLE_LOOKUP.search(question.strip()))
+
+
+def _wants_table(question: str, row_count: int) -> bool:
+    return row_count > _TABLE_ROW_THRESHOLD or bool(_LIST_REQUEST.search(question))
+
+
+def _conversational_refusal(reason: str | None) -> str:
+    return reason or "I can't answer that from your reconciliation data."
+
 
 @router.post("/ask", response_model=AskOut)
 async def ask(
@@ -1180,12 +1259,29 @@ async def ask(
     client: LLMClient = Depends(get_llm_client),
     buffer: LLMCallBuffer = Depends(get_llm_buffer),
 ) -> AskOut:
-    """Guarded text-to-SQL (§7.8).
+    """The conversational Ask tab (§13.7) — a chat, not a query box.
 
-    Generate, parse, reject, rewrite, then execute on a read-only transaction
-    under RLS. **No number in the answer comes from the model** — the answer
-    text is rendered in Python from the rows the database returned, and the SQL
-    ships with it so the user can check the question we actually asked.
+    Two tools, chosen deterministically from the question's own phrasing,
+    never by an extra classification call: a guarded SELECT (§7.8, unchanged
+    — sqlglot guard, table whitelist, read-only transaction, statement
+    timeout, RLS) for anything about the current data, and
+    ``fc.audit.replay.diff_exceptions`` for "what changed" / "compare the
+    last two runs" — a count query answers "46 then, 44 now"; the diff
+    answers which specific items moved and why.
+
+    **No number in the answer comes from the model.** SQL rows and diff
+    facts are both computed in Python; the model only phrases them
+    (``sql_narrate``), and ``fc.llm.grounding.is_grounded`` discards any
+    phrasing that states a number the facts never gave it, falling back to
+    the same deterministic rendering the old table-only Ask tab used.
+
+    The last 5 turns travel with the request (no session table — PRD §3.7's
+    schema is frozen) so a follow-up like "which of those are over ₹10,000"
+    resolves its referent from the conversation, then asks fresh SQL. It
+    never answers by filtering the previous turn's numbers in its head —
+    there is no path from one turn's rows into the next turn's answer except
+    through a new query, which is what makes "the underlying data can have
+    changed" true rather than aspirational.
     """
     if not can(user.role, "agent:read"):
         permitted = roles_permitting("agent:read")
@@ -1196,6 +1292,33 @@ async def ask(
         )
 
     question = sanitise(body.question, max_chars=1000)
+    history = body.history[-5:]
+
+    if _wants_diff(question):
+        return await _answer_via_diff(
+            question, history, session=session, user=user, client=client, buffer=buffer
+        )
+    return await _answer_via_sql(
+        question,
+        history,
+        run_id=body.run_id,
+        session=session,
+        user=user,
+        client=client,
+        buffer=buffer,
+    )
+
+
+async def _answer_via_sql(
+    question: str,
+    history: Sequence[AskTurnIn],
+    *,
+    run_id: str | None,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    client: LLMClient,
+    buffer: LLMCallBuffer,
+) -> AskOut:
     refusal = SqlPlan(
         answerable=False,
         reason=(
@@ -1204,12 +1327,13 @@ async def ask(
             "computed, not generated."
         ),
     )
+    purpose = "text_to_sql_light" if _is_simple_lookup(question, history) else "text_to_sql"
     result = await client.call(
-        "text_to_sql",
-        prompt=wrap_untrusted(question, source="operator_question"),
+        purpose,
+        prompt=wrap_untrusted(_sql_prompt(question, history, run_id), source="operator_question"),
         system=load_prompt("sql_system"),
         tenant_id=user.tenant_id,
-        run_id=body.run_id,
+        run_id=run_id,
         schema=SqlPlan,
         requires=STRUCTURED,
         fallback=refusal.model_dump_json(),
@@ -1220,10 +1344,12 @@ async def ask(
     plan = SqlPlan.model_validate_json(result.text)
     if not plan.answerable or not plan.sql:
         # Rendered verbatim. A refusal that gets paraphrased into an apology
-        # stops being information (hard rule 4).
+        # stops being information (hard rule 4) — and §13.7 wants it plain,
+        # not styled as an error, because a refusal is a correct outcome.
         return AskOut(
             answerable=False,
-            refusal_reason=plan.reason or "That cannot be answered from these tables.",
+            tool="sql",
+            refusal_reason=_conversational_refusal(plan.reason),
             model_used=result.model,
             cached=result.cached,
         )
@@ -1233,8 +1359,9 @@ async def ask(
     except SqlRejected as exc:
         return AskOut(
             answerable=False,
+            tool="sql",
             sql=plan.sql,
-            refusal_reason=f"The generated query was refused: {exc}",
+            refusal_reason=f"That query wasn't safe to run: {exc}",
             model_used=result.model,
             cached=result.cached,
         )
@@ -1245,16 +1372,239 @@ async def ask(
         fetched = cursor.fetchall()
 
     rows = [dict(zip(columns, _jsonable_row(r), strict=True)) for r in fetched]
+    facts = _facts_from_rows(rows, columns)
+    answer, narrate_model, narrate_cached = await _narrate(
+        question,
+        facts,
+        deterministic_fallback=_render_answer(rows, columns),
+        session=session,
+        user=user,
+        client=client,
+        buffer=buffer,
+        run_id=run_id,
+    )
     return AskOut(
         answerable=True,
-        answer=_render_answer(rows, columns),
+        answer=answer,
+        tool="sql",
         sql=safe_sql,
         rows=rows,
         row_count=len(rows),
-        model_used=result.model,
-        cached=result.cached,
+        show_table=_wants_table(question, len(rows)),
+        model_used=narrate_model or result.model,
+        cached=narrate_cached or result.cached,
         truncated=len(rows) >= MAX_ROWS,
     )
+
+
+async def _answer_via_diff(
+    question: str,
+    history: Sequence[AskTurnIn],
+    *,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    client: LLMClient,
+    buffer: LLMCallBuffer,
+) -> AskOut:
+    runs = (
+        await session.scalars(
+            select(Run)
+            .where(Run.tenant_id == user.tenant_id, Run.status == "complete")
+            .order_by(Run.started_at.desc())
+            .limit(10)
+        )
+    ).all()
+    if len(runs) < 2:
+        return AskOut(
+            answerable=False,
+            tool="diff",
+            refusal_reason="There's only one completed run so far — nothing to compare it to yet.",
+        )
+
+    to_run, from_run = _pick_runs_to_compare(question, runs)
+    before = (
+        await session.scalars(select(ExceptionRow).where(ExceptionRow.run_id == from_run.run_id))
+    ).all()
+    after = (
+        await session.scalars(select(ExceptionRow).where(ExceptionRow.run_id == to_run.run_id))
+    ).all()
+    diff = diff_exceptions(
+        [exception_from_row(e) for e in before], [exception_from_row(e) for e in after]
+    )
+
+    rows = _diff_rows(diff)
+    facts = _facts_from_diff(diff, from_run.run_id, to_run.run_id)
+    answer, model_used, cached = await _narrate(
+        question,
+        facts,
+        deterministic_fallback=_render_diff_answer(diff),
+        session=session,
+        user=user,
+        client=client,
+        buffer=buffer,
+        run_id=to_run.run_id,
+    )
+    return AskOut(
+        answerable=True,
+        answer=answer,
+        tool="diff",
+        rows=rows,
+        row_count=len(rows),
+        show_table=_wants_table(question, len(rows)),
+        compared_from_run_id=from_run.run_id,
+        compared_to_run_id=to_run.run_id,
+        model_used=model_used,
+        cached=cached,
+    )
+
+
+def _pick_runs_to_compare(question: str, runs: Sequence[Run]) -> tuple[Run, Run]:
+    """``runs`` is newest first. "Since yesterday" picks the newest run from
+    a strictly earlier calendar day than the newest run overall; anything
+    else — "compare the last two runs", no qualifier at all — compares the
+    two most recent runs, which is also what "yesterday" falls back to if
+    every run so far happened today (true of most rehearsals)."""
+    to_run = runs[0]
+    if _YESTERDAY.search(question):
+        for candidate in runs[1:]:
+            if candidate.started_at.date() < to_run.started_at.date():
+                return to_run, candidate
+    return to_run, runs[1]
+
+
+async def _narrate(
+    question: str,
+    facts: list[str],
+    *,
+    deterministic_fallback: str,
+    session: AsyncSession,
+    user: AuthenticatedUser,
+    client: LLMClient,
+    buffer: LLMCallBuffer,
+    run_id: str | None,
+) -> tuple[str, str | None, bool]:
+    """Phrase ``facts`` as 1-3 conversational sentences answering ``question``.
+
+    ``sql_narrate`` is in ``HAS_DOWNSTREAM_CHECK`` (fc.llm.schemas): its
+    output is never auto-cached by ``client.call`` — only ``confirm()``
+    writes it, and only once ``is_grounded`` has agreed every number the
+    model stated was actually one of the facts it was handed. A narration
+    that invents a number is discarded here, not shown, and the same
+    deterministic rendering the table-only Ask tab used is returned instead.
+    """
+    fallback = NarrativeOut(narrative=deterministic_fallback)
+    prompt = (
+        "Question: "
+        + question
+        + "\n\nFacts (already computed, use only these numbers):\n"
+        + ("\n".join(facts) if facts else "(no rows)")
+    )
+    result = await client.call(
+        "sql_narrate",
+        prompt=prompt,
+        system=load_prompt("sql_narrate"),
+        tenant_id=user.tenant_id,
+        run_id=run_id,
+        schema=NarrativeOut,
+        requires=STRUCTURED,
+        fallback=fallback.model_dump_json(),
+    )
+    narrated = NarrativeOut.model_validate_json(result.text).narrative
+
+    if result.terminal:
+        # The terminal's own fallback text — already exactly
+        # `deterministic_fallback`, never cached, nothing to verify.
+        answer = narrated
+    elif is_grounded(narrated, facts):
+        result = client.confirm(result, tenant_id=user.tenant_id, run_id=run_id)
+        answer = narrated
+    else:
+        client.reject(result, tenant_id=user.tenant_id, run_id=run_id)
+        answer = deterministic_fallback
+
+    await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+    await session.commit()
+    return answer, result.model, result.cached
+
+
+def _sql_prompt(question: str, history: Sequence[AskTurnIn], run_id: str | None) -> str:
+    lines = [f"Run scope: {run_id or 'most recent run'}"]
+    if history:
+        lines.append("")
+        lines.append(
+            "Conversation so far (resolve referents like 'those'/'it' from "
+            "here, but write a fresh, complete, self-contained query — the "
+            "underlying data can have changed since the earlier turn ran):"
+        )
+        for turn in history:
+            lines.append(f"Q: {turn.question}")
+            lines.append(f"A: {turn.answer}")
+        lines.append("")
+        lines.append("Current question:")
+        lines.append(question)
+    else:
+        # No history: normalise so repeated phrasing of the same first
+        # question hits the cache (§7.6) — the prompt is part of the cache
+        # key, and a fresh conversation's opener is the case worth caching.
+        lines.append("")
+        lines.append("Current question:")
+        lines.append(" ".join(question.strip().lower().split()))
+    return "\n".join(lines)
+
+
+def _facts_from_rows(rows: list[dict[str, Any]], columns: Sequence[str]) -> list[str]:
+    """Every row, every column, already formatted the way a reader sees it —
+    the only numbers ``sql_narrate`` is allowed to state."""
+    return [", ".join(f"{col}: {_display(col, row[col])}" for col in columns) for row in rows]
+
+
+def _facts_from_diff(diff: ReplayDiff, from_run_id: str, to_run_id: str) -> list[str]:
+    facts = [
+        f"from_run: {from_run_id}",
+        f"to_run: {to_run_id}",
+        f"added_count: {len(diff.added)}",
+        f"removed_count: {len(diff.removed)}",
+        f"changed_count: {len(diff.changed)}",
+    ]
+    for entry in diff.added:
+        exc = entry.after
+        facts.append(
+            f"added {entry.exception_id}: category {exc.category if exc else 'unknown'}, "
+            f"amount {fmt_inr(exc.amount_paise) if exc else 'unknown'} — {entry.why}"
+        )
+    for entry in diff.removed:
+        exc = entry.before
+        facts.append(
+            f"removed {entry.exception_id}: category {exc.category if exc else 'unknown'}, "
+            f"amount {fmt_inr(exc.amount_paise) if exc else 'unknown'} — {entry.why}"
+        )
+    for entry in diff.changed:
+        facts.append(f"changed {entry.exception_id}: {entry.why}")
+    return facts
+
+
+def _diff_rows(diff: ReplayDiff) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    groups = (("added", diff.added), ("removed", diff.removed), ("changed", diff.changed))
+    for kind, entries in groups:
+        for entry in entries:
+            rows.append({"change": kind, "exception_id": entry.exception_id, "why": entry.why})
+    return rows
+
+
+def _render_diff_answer(diff: ReplayDiff) -> str:
+    """No model involved — the same "answer built from data, not phrased by
+    a model" guarantee ``_render_answer`` gives the SQL path."""
+    if diff.is_empty:
+        return "No exceptions changed between the two runs."
+    parts = []
+    if diff.added:
+        parts.append(f"{len(diff.added)} new")
+    if diff.removed:
+        parts.append(f"{len(diff.removed)} resolved")
+    if diff.changed:
+        parts.append(f"{len(diff.changed)} changed")
+    return ", ".join(parts) + "."
 
 
 def _text(sql: str) -> Any:
@@ -1276,10 +1626,9 @@ def _jsonable_row(row: Any) -> list[Any]:
 
 
 def _render_answer(rows: list[dict[str, Any]], columns: Sequence[str]) -> str:
-    """The answer sentence, built from the rows. No model involved.
-
-    This is the mechanism behind "the model never states a number it did not get
-    back from a query": there is no path from the model's output to this string.
+    """The deterministic fallback answer, built from the rows with no model
+    involved — used verbatim when no model is reachable, and as the safe
+    answer ``_narrate`` falls back to when a narration fails grounding.
     Money columns are formatted through ``fmt_inr`` so paise never reach a
     reader as a bare integer.
     """

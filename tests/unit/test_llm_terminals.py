@@ -38,6 +38,10 @@ FALLBACKS = {
     "text_to_sql": json.dumps(
         {"answerable": False, "sql": None, "reason": "No model is reachable right now."}
     ),
+    "text_to_sql_light": json.dumps(
+        {"answerable": False, "sql": None, "reason": "No model is reachable right now."}
+    ),
+    "sql_narrate": json.dumps({"narrative": "Here are the numbers, unphrased."}),
     "rule_draft": json.dumps({"name": "Nykaa commission 18%", "description": "Learned from 3."}),
     "embedding": "blinkit commerce",
 }

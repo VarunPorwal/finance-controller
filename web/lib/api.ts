@@ -1121,12 +1121,29 @@ export interface paths {
         put?: never;
         /**
          * Ask
-         * @description Guarded text-to-SQL (§7.8).
+         * @description The conversational Ask tab (§13.7) — a chat, not a query box.
          *
-         *     Generate, parse, reject, rewrite, then execute on a read-only transaction
-         *     under RLS. **No number in the answer comes from the model** — the answer
-         *     text is rendered in Python from the rows the database returned, and the SQL
-         *     ships with it so the user can check the question we actually asked.
+         *     Two tools, chosen deterministically from the question's own phrasing,
+         *     never by an extra classification call: a guarded SELECT (§7.8, unchanged
+         *     — sqlglot guard, table whitelist, read-only transaction, statement
+         *     timeout, RLS) for anything about the current data, and
+         *     ``fc.audit.replay.diff_exceptions`` for "what changed" / "compare the
+         *     last two runs" — a count query answers "46 then, 44 now"; the diff
+         *     answers which specific items moved and why.
+         *
+         *     **No number in the answer comes from the model.** SQL rows and diff
+         *     facts are both computed in Python; the model only phrases them
+         *     (``sql_narrate``), and ``fc.llm.grounding.is_grounded`` discards any
+         *     phrasing that states a number the facts never gave it, falling back to
+         *     the same deterministic rendering the old table-only Ask tab used.
+         *
+         *     The last 5 turns travel with the request (no session table — PRD §3.7's
+         *     schema is frozen) so a follow-up like "which of those are over ₹10,000"
+         *     resolves its referent from the conversation, then asks fresh SQL. It
+         *     never answers by filtering the previous turn's numbers in its head —
+         *     there is no path from one turn's rows into the next turn's answer except
+         *     through a new query, which is what makes "the underlying data can have
+         *     changed" true rather than aspirational.
          */
         post: operations["ask_api_v1_agent_ask_post"];
         delete?: never;
@@ -1218,6 +1235,8 @@ export interface components {
             answerable: boolean;
             /** Answer */
             answer?: string | null;
+            /** Tool */
+            tool?: string | null;
             /** Sql */
             sql?: string | null;
             /**
@@ -1232,6 +1251,15 @@ export interface components {
              * @default 0
              */
             row_count: number;
+            /**
+             * Show Table
+             * @default false
+             */
+            show_table: boolean;
+            /** Compared From Run Id */
+            compared_from_run_id?: string | null;
+            /** Compared To Run Id */
+            compared_to_run_id?: string | null;
             /** Refusal Reason */
             refusal_reason?: string | null;
             /** Model Used */
@@ -1253,6 +1281,24 @@ export interface components {
             question: string;
             /** Run Id */
             run_id?: string | null;
+            /**
+             * History
+             * @default []
+             */
+            history: components["schemas"]["AskTurnIn"][];
+        };
+        /**
+         * AskTurnIn
+         * @description One prior turn, supplied by the client — the server keeps no
+         *     conversation state (PRD §3.7 has no session table, and CLAUDE.md forbids
+         *     a schema change to add one). The client sends the last 5; the server
+         *     caps it there too, defence in depth.
+         */
+        AskTurnIn: {
+            /** Question */
+            question: string;
+            /** Answer */
+            answer: string;
         };
         /** AuditEventOut */
         AuditEventOut: {

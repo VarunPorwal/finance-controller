@@ -48,10 +48,17 @@ __all__ = [
 Provider = Literal["gemini", "groq"]
 Thinking = Literal["none", "low", "high"]
 
-#: The eight routed purposes (§7.2 TASK_ROUTE).
+#: The routed purposes (§7.2 TASK_ROUTE). ``text_to_sql_light`` is
+#: ``text_to_sql`` for a question cheap enough to try Flash-Lite first (a
+#: single aggregate, no comparison, no breakdown) — same schema, same guard,
+#: different first rung on the ladder. ``sql_narrate`` turns a SQL or diff
+#: result's already-computed facts into the 1-3 sentences the Ask tab shows;
+#: it is never given a number it must invent, only ones to phrase (§7.1).
 Purpose = Literal[
     "command_parse",
     "text_to_sql",
+    "text_to_sql_light",
+    "sql_narrate",
     "narrative",
     "cluster_label",
     "explanation",
@@ -72,7 +79,12 @@ Outcome = Literal["ok", "rate_limited", "timeout", "schema_fail", "down", "termi
 #: next attempt. For every other purpose schema validation *is* the check, and
 #: caching inline is correct. Adding a purpose with a downstream check means
 #: adding it here; forgetting to means a rejected output gets cached forever.
-HAS_DOWNSTREAM_CHECK: frozenset[str] = frozenset({"pdf_extract"})
+#: ``sql_narrate``'s downstream check is ``fc.llm.grounding.is_grounded`` —
+#: every currency/percentage/count token the narration states must trace back
+#: to a fact it was actually handed. A narration that fails is never cached,
+#: for exactly the reason ``pdf_extract`` is here: a plausible-looking answer
+#: that slipped one invented number past validation must not be re-served.
+HAS_DOWNSTREAM_CHECK: frozenset[str] = frozenset({"pdf_extract", "sql_narrate"})
 
 
 @dataclass(frozen=True)
