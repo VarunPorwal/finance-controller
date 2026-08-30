@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.converters import rule_from_row
 from api.errors import ApiError
 from db.models import Rule as RuleRow
-from db.models import Run
+from db.models import Run, User
 from fc.models.rule import Rule
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules, ruleset_hash
 
@@ -101,6 +101,19 @@ async def seed_rules_from_yaml(
     exactly as they are, so a redeploy never disturbs a rule someone has since
     edited, retired or superseded through the Rulebook.
     """
+    # rules.created_by is NOT NULL and FKs to users, so the seed has to be
+    # attributed to a real account rather than a synthetic "system" principal.
+    # The tenant's own earliest active user is the closest honest answer: these
+    # rules arrived with the tenant. No user means no tenant worth seeding yet.
+    actor = await session.scalar(
+        select(User.user_id)
+        .where(User.tenant_id == tenant_id, User.status == "active")
+        .order_by(User.created_at, User.user_id)
+        .limit(1)
+    )
+    if actor is None:
+        return 0
+
     ruleset = load_rules(path, tenant_id=tenant_id, created_at=created_at)
     existing = {
         (rule_id, version)
@@ -131,9 +144,9 @@ async def seed_rules_from_yaml(
                 effective_to=rule.effective_to,
                 status=rule.status,
                 origin="imported",
-                created_by="system:yaml-seed",
+                created_by=actor,
                 created_at=created_at,
-                activated_by="system:yaml-seed" if rule.status == "active" else None,
+                activated_by=actor if rule.status == "active" else None,
                 activated_at=created_at if rule.status == "active" else None,
             )
         )
