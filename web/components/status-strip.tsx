@@ -1,0 +1,59 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { apiClient, type components } from "@/lib/client";
+
+type Health = components["schemas"]["api__routers__agent__HealthOut"];
+
+/**
+ * PRD §13.5 header: "Flash-Lite ✓ Flash ✓ · Groq standby · 4 calls · 2 cached".
+ * One glance answers "is this thing actually calling a model, and how much."
+ */
+export function StatusStrip() {
+  const [health, setHealth] = useState<Health | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const { data } = await apiClient.GET("/api/v1/agent/health", { params: { query: {} } });
+      if (!cancelled && data) setHealth(data);
+    };
+    void load();
+    const interval = setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (!health) {
+    return <span className="text-paper-500 text-xs">model status —</span>;
+  }
+
+  const tierEntries = Object.entries(health.tiers ?? {});
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {tierEntries.map(([tier, models]) => {
+        const rows = models as Array<Record<string, unknown>>;
+        const anyAvailable = rows.some((row) => row.available);
+        return (
+          <span key={tier} className="text-paper-300">
+            {tier}
+            <span
+              className={anyAvailable ? "text-sig-green ml-1" : "text-sig-amber ml-1"}
+              aria-label={anyAvailable ? "available" : "standby"}
+            >
+              {anyAvailable ? "✓" : "standby"}
+            </span>
+          </span>
+        );
+      })}
+      <span className="text-paper-500">·</span>
+      <span className="fc-numeric text-paper-300">{health.calls_this_run} calls</span>
+      <span className="text-paper-500">·</span>
+      <span className="fc-numeric text-paper-300">{health.cache_hit_rate} cached</span>
+      {health.degraded && <span className="text-sig-amber">degraded</span>}
+    </div>
+  );
+}

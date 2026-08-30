@@ -1,0 +1,122 @@
+name: CI
+
+# PRD §12.6. Five jobs, matching the buildathon's own gates: engine-isolation
+# proves the promise "make eval runs with no database and no network" is true
+# rather than assumed, integration is where RLS / the read-only transaction /
+# dry_run / the audit hash chain are actually exercised (none of that runs
+# without Postgres), guards is the fast AST-level check on hard rules 1/2/6,
+# frontend proves a Pydantic change breaks the build at the exact call site,
+# and eval is where false_auto_resolutions == 0 blocks the merge for real.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.5.x"
+
+jobs:
+  engine-isolation:
+    name: engine-isolation (no DB, no network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --locked
+      # No DATABASE_URL, no LLM keys in the environment at all: a network call
+      # anywhere in this run fails loudly instead of silently succeeding.
+      - run: uv run pytest tests/unit -q
+
+  guards:
+    name: guards (hard rules 1, 2, 6, mypy strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --locked
+      - run: uv run python scripts/check_no_float_in_money.py
+      - run: uv run python scripts/check_no_llm_in_decisions.py
+      - run: uv run mypy --strict engine/src
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  integration:
+    name: integration (RLS, read-only transaction, dry_run, audit chain)
+    runs-on: ubuntu-latest
+    # Talks to the project's Neon branch, per CLAUDE.md - not a docker
+    # Postgres, because the RLS proof needs the real fc_app_user role and
+    # pgvector as Neon serves it. Configure these as repository secrets;
+    # FC_REQUIRE_DB=1 turns "Neon was cold" into a failed job instead of a
+    # quietly green one (CLAUDE.md, 29 Aug incident).
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL_APP: ${{ secrets.DATABASE_URL_APP }}
+      DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
+      FC_APP_PASSWORD: ${{ secrets.FC_APP_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      FC_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --locked
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/integration -q
+
+  frontend:
+    name: frontend (generated client, build fails on schema drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --locked
+      # No live server: the schema is dumped straight from the FastAPI app,
+      # exactly as `dev.ps1 client` does, so this job needs no port and no DB.
+      - run: uv run python -m api.main --openapi > web/lib/openapi.json
+      - run: npm ci
+        working-directory: web
+      - run: npx openapi-typescript lib/openapi.json -o lib/api.ts
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+
+  eval:
+    name: eval (accuracy gates, PRD 12.5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: uv sync --locked
+      - run: uv run python -m fc.generator.seed
+        env:
+          SEED: "42"
+          N: "500"
+      - run: uv run pytest tests/eval -q -m eval
+      - run: uv run python scripts/assert_gates.py --report eval-gates.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-gates
+          path: eval-gates.json

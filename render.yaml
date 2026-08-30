@@ -1,0 +1,111 @@
+# Render Blueprint for the API. PRD §3.4/§11.2: Render (API) + Vercel
+# (frontend) + Neon (Postgres) — no Docker, no Render-managed database.
+#
+# Deploy: connect this repo in the Render dashboard ("New +" -> "Blueprint"),
+# point it at this file, then fill in every env var marked sync: false in the
+# dashboard (secrets are never committed). First deploy runs the migration
+# via startCommand; every redeploy re-runs it too, which is safe because
+# `alembic upgrade head` is a no-op once the schema is current.
+services:
+  - type: web
+    name: finance-controller-api
+    runtime: python
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run alembic upgrade head && uv run uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Database — Neon. DATABASE_URL is the owner role (migrations);
+      # DATABASE_URL_APP is fc_app_user, the RLS-bound role the app actually
+      # queries through (CLAUDE.md: RLS tests must run as fc_app_user, not
+      # the owner, and this is the same reason in production).
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_APP
+        sync: false
+      - key: DATABASE_URL_READONLY
+        sync: false
+      - key: FC_APP_PASSWORD
+        sync: false
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "10"
+      # LLM
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LLM_MODE
+        value: live
+      - key: LLM_CACHE_DIR
+        value: ./.llm-cache
+      - key: LLM_CACHE_TTL_DAYS
+        value: "7"
+      - key: LLM_MAX_CALLS_PER_RUN
+        value: "10"
+      - key: GEMINI_CONTEXT_CACHE_TTL
+        value: "3600"
+      # Reconciliation config — must match whatever the demo corpus was
+      # generated and evaluated against (fc.eval.report's SHIPPED_AUTO_THRESHOLD).
+      - key: AUTO_THRESHOLD
+        value: "0.94"
+      - key: TOLERANCE_ABS_PAISE
+        value: "100"
+      - key: TOLERANCE_PCT
+        value: "0.0005"
+      - key: ROUNDING_DRIFT_PAISE
+        value: "1"
+      - key: MAX_SUBSET_N
+        value: "40"
+      - key: SUBSET_TIMEOUT_MS
+        value: "500"
+      - key: MAX_BUCKET_SIZE
+        value: "200"
+      - key: RECHECK_INTERVAL_DAYS
+        value: "2"
+      - key: MAX_RECHECKS
+        value: "3"
+      - key: TYPED_CONFIRM_PAISE
+        value: "5000000"
+      # Auth
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_TTL_MINUTES
+        value: "15"
+      - key: REFRESH_TTL_DAYS
+        value: "7"
+      - key: DEMO_TOKEN
+        sync: false
+      # Notifications
+      - key: RESEND_API_KEY
+        sync: false
+      - key: NOTIFY_FROM
+        value: onboarding@resend.dev
+      - key: NOTIFY_ESCALATION_TO
+        sync: false
+      # App — FRONTEND_ORIGIN gates CORS to exactly this origin
+      # (api/main.py); set it to the deployed Vercel URL, not localhost.
+      - key: API_BASE_URL
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: SENTRY_DSN
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+      # Keep-alive: Render's free plan spins the service down after 15
+      # minutes idle (a cold start costs the first request of a demo real
+      # time), and Neon suspends its own compute after inactivity
+      # separately. SCHEDULER_ENABLED=true is what turns on
+      # api/scheduler.py's keep_alive_job (pings Neon every ~4 minutes) —
+      # it does NOT stop Render's own free-plan spin-down, which needs an
+      # external pinger (see DONE WHEN notes in the deploy runbook).
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: TENANT_ID
+        value: t_lumea
