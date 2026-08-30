@@ -773,7 +773,22 @@ export interface paths {
         /** List Rule Versions */
         get: operations["list_rule_versions_api_v1_rules__rule_id__versions_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Rule Version
+         * @description Add version N+1 of an existing rule, as a draft.
+         *
+         *     §4.3.6 says an active rule is immutable and an edit creates a new version.
+         *     The database enforced the first half — ``trg_rules_immutable`` refuses a
+         *     scope/deductions/tolerance change on an active row — while nothing
+         *     implemented the second, so the trigger was a wall with no door: a wrong
+         *     active rule could only be retired and re-created under a different id, and
+         *     ``/versions`` could never return more than one entry.
+         *
+         *     Version N is left exactly as it is, still active, still doing its job. It
+         *     is only when N+1 is *activated* that N's window is closed behind it, so a
+         *     draft that is never approved costs nothing.
+         */
+        post: operations["create_rule_version_api_v1_rules__rule_id__versions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2512,6 +2527,27 @@ export interface components {
              * @default 0.95
              */
             effective_confidence: string;
+        };
+        /**
+         * RuleVersionRequest
+         * @description A new version of an existing rule. ``rule_id`` comes from the path.
+         *
+         *     ``name`` is optional because a rate change is usually the same rule under
+         *     the same name; omit it and version N's name carries over.
+         */
+        RuleVersionRequest: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            scope: components["schemas"]["Scope"];
+            /** Deductions */
+            deductions: components["schemas"]["Deduction-Input"][];
+            tolerance: components["schemas"]["Tolerance-Input"];
+            /** Priority */
+            priority?: number | null;
+            /** Effective Confidence */
+            effective_confidence?: string | null;
         };
         /** RunOut */
         RunOut: {
@@ -4450,6 +4486,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Rule"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_rule_version_api_v1_rules__rule_id__versions_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                rule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Rule"];
                 };
             };
             /** @description Validation Error */

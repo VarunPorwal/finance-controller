@@ -13,7 +13,7 @@ rather than at each call site.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
@@ -49,6 +49,24 @@ class RuleCreateRequest(BaseModel):
     tolerance: Tolerance
     priority: int = 100
     effective_confidence: str = "0.9500"
+
+
+class RuleVersionRequest(BaseModel):
+    """A new version of an existing rule. ``rule_id`` comes from the path.
+
+    ``name`` is optional because a rate change is usually the same rule under
+    the same name; omit it and version N's name carries over.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+    scope: Scope
+    deductions: list[Deduction]
+    tolerance: Tolerance
+    priority: int | None = None
+    effective_confidence: str | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -290,6 +308,98 @@ def _backtest_out(result: BacktestResult) -> BacktestOut:
     )
 
 
+@router.post("/{rule_id}/versions", response_model=Rule, status_code=201)
+async def create_rule_version(
+    rule_id: str,
+    body: RuleVersionRequest,
+    dry_run: bool = Query(False),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> Rule:
+    """Add version N+1 of an existing rule, as a draft.
+
+    §4.3.6 says an active rule is immutable and an edit creates a new version.
+    The database enforced the first half — ``trg_rules_immutable`` refuses a
+    scope/deductions/tolerance change on an active row — while nothing
+    implemented the second, so the trigger was a wall with no door: a wrong
+    active rule could only be retired and re-created under a different id, and
+    ``/versions`` could never return more than one entry.
+
+    Version N is left exactly as it is, still active, still doing its job. It
+    is only when N+1 is *activated* that N's window is closed behind it, so a
+    draft that is never approved costs nothing.
+    """
+    versions = (
+        await session.scalars(
+            select(RuleRow)
+            .where(RuleRow.tenant_id == user.tenant_id, RuleRow.rule_id == rule_id)
+            .order_by(RuleRow.version.desc())
+        )
+    ).all()
+    if not versions:
+        raise ApiError(404, "not found", f"no rule {rule_id}; use POST /rules to create one")
+    latest = versions[0]
+
+    # The successor must start after the incumbent, or closing the incumbent's
+    # window on activation would produce effective_to < effective_from.
+    live = next((v for v in versions if v.status == "active"), None)
+    if live is not None and body.scope.date_from <= live.effective_from:
+        raise ApiError(
+            409,
+            "invalid window",
+            f"version {latest.version + 1} starts {body.scope.date_from}, which is not after "
+            f"active version {live.version}'s {live.effective_from}. A successor has to begin "
+            "after the version it replaces, or the two would overlap.",
+        )
+
+    now = datetime.now(UTC)
+    v_hash = version_hash(body.scope, body.deductions, body.tolerance)
+    row = RuleRow(
+        rule_id=rule_id,
+        version=latest.version + 1,
+        tenant_id=user.tenant_id,
+        version_hash=v_hash,
+        name=body.name or latest.name,
+        description=body.description if body.description is not None else latest.description,
+        scope=body.scope.model_dump(mode="json", exclude_none=True),
+        deductions=[d.model_dump(mode="json") for d in body.deductions],
+        tolerance=body.tolerance.model_dump(mode="json"),
+        priority=body.priority if body.priority is not None else latest.priority,
+        effective_confidence=(
+            body.effective_confidence
+            if body.effective_confidence is not None
+            else latest.effective_confidence
+        ),
+        effective_from=body.scope.date_from,
+        effective_to=body.scope.date_to,
+        status="draft",
+        origin="manual",
+        created_by=user.user_id,
+        created_at=now,
+    )
+    session.add(row)
+    await session.flush()
+
+    await append_audit(
+        session,
+        tenant_id=user.tenant_id,
+        actor=f"user:{user.user_id}",
+        action="rule.version",
+        subject_type="rule",
+        subject_id=f"{rule_id}:{row.version}",
+        payload={
+            "supersedes": latest.version,
+            "version_hash": v_hash,
+            "effective_from": body.scope.date_from.isoformat(),
+            "dry_run": dry_run,
+        },
+        created_at=now,
+    )
+    result = rule_from_row(row)
+    await finish(session, dry_run=dry_run)
+    return result
+
+
 @router.post("/{rule_id}/backtest", response_model=BacktestOut)
 async def backtest_rule(
     rule_id: str,
@@ -339,6 +449,37 @@ async def activate_rule(
         )
 
     now = datetime.now(UTC)
+
+    # Close the predecessor's window behind the successor so the two never
+    # overlap: a transaction dated anywhere on the timeline must resolve to
+    # exactly one version. effective_to is inclusive, so the incumbent ends the
+    # day before the successor begins. trg_rules_immutable permits this — it
+    # guards scope/deductions/tolerance, not lifecycle columns.
+    #
+    # The incumbent stays status='active'. That is the whole point: a rate that
+    # changed mid-period must still price the transactions that happened before
+    # the change, and fc.rules.scope selects by window among active versions.
+    # Retiring it here would silently reprice history — which is exactly what
+    # 'retired' is reserved to mean, an operator saying "stop using this at
+    # all", and is why api/ruleset.py excludes retired rules outright.
+    superseded: list[int] = []
+    if row.version > 1:
+        incumbents = (
+            await session.scalars(
+                select(RuleRow).where(
+                    RuleRow.tenant_id == user.tenant_id,
+                    RuleRow.rule_id == rule_id,
+                    RuleRow.version != version,
+                    RuleRow.status == "active",
+                )
+            )
+        ).all()
+        closes_on = row.effective_from - timedelta(days=1)
+        for prior in incumbents:
+            if prior.effective_to is None or prior.effective_to > closes_on:
+                prior.effective_to = closes_on
+                superseded.append(prior.version)
+
     row.status = "active"
     row.activated_by = user.user_id
     row.activated_at = now
@@ -351,7 +492,12 @@ async def activate_rule(
         action="rule.activate",
         subject_type="rule",
         subject_id=f"{rule_id}:{version}",
-        payload={"reason": body.reason, "version_hash": row.version_hash, "dry_run": dry_run},
+        payload={
+            "reason": body.reason,
+            "version_hash": row.version_hash,
+            "superseded_versions": superseded,
+            "dry_run": dry_run,
+        },
         created_at=now,
         ruleset_hash=row.version_hash,
     )
