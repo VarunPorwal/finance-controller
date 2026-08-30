@@ -43,7 +43,8 @@ change the other.
 | `make web` | `.\scripts\dev.ps1 web` | next dev |
 | `make demo` | `.\scripts\dev.ps1 demo` | seed + full reconciliation |
 | `make demo-local` | `.\scripts\dev.ps1 demo-local` | same, local Postgres, LLM_MODE=cache_only, no network |
-| `make check` | `.\scripts\dev.ps1 check` | lint + typecheck + test + eval. **Run this before every commit.** |
+| `make fast` | `.\scripts\dev.ps1 fast` | lint + typecheck + unit tests. No DB, no network, ~27s. **Run this while iterating.** |
+| `make check` | `.\scripts\dev.ps1 check` | `fast` + integration + eval, ~170s. **Run this before every commit.** |
 | `make eval` | `.\scripts\dev.ps1 eval` | accuracy suite; **exits non-zero when a §12.5 gate fails** |
 | `make migrate` | `.\scripts\dev.ps1 migrate` | alembic upgrade head |
 | `make generate` | `.\scripts\dev.ps1 generate -Seed 42 -N 500` | synthetic corpus |
@@ -52,8 +53,32 @@ change the other.
 | `make typecheck` | `.\scripts\dev.ps1 typecheck` | mypy --strict engine/src |
 | `make client` | `.\scripts\dev.ps1 client` | regenerate web/lib/api.ts |
 
-Run `.\scripts\dev.ps1 check` before reporting a task complete. It is lint +
-typecheck + test + eval, and it fails the build on any §12.5 gate.
+Two targets, two jobs. **`fast`** is the iteration loop: lint, types and unit
+tests, no database and no network, under half a minute. **`check`** is the gate:
+everything `fast` runs plus the integration suite and the §12.5 eval gates.
+
+Run `check` before reporting a task complete or committing. `fast` is not a
+substitute and cannot be: the integration suite is where RLS, the read-only
+transaction, `dry_run` and the audit hash chain are actually proven, and none of
+that runs without Postgres.
+
+**`check` sets `FC_REQUIRE_DB=1`, which turns a skipped integration or eval test
+into a failure, naming every test that skipped.** Do not remove this as noise.
+pytest reports a skip as success, and on 29 Aug a green run had 21-29
+integration tests silently skipped because Neon was cold — which meant the RLS
+and read-only-transaction proofs, the two things the text-to-SQL safety claim
+rests on, had never executed on the run that was used to justify them. A skipped
+test is an unrun proof. Running `pytest` directly still skips normally, so
+working offline is unaffected.
+
+The integration suite shares one event loop, one admin connection and one
+SQLAlchemy pool for the whole session (`tests/integration/conftest.py`), and
+purges a tenant in a single round trip rather than a dozen. The database is in
+Singapore: a connection costs ~0.93s and a round trip ~0.19s, so setup was most
+of the runtime before that. Do not reintroduce per-test `asyncio.run` or
+`get_engine.cache_clear()` — the engine binds its pool to the loop it first ran
+on, and a per-test loop is what made clearing the cache necessary in the first
+place.
 
 `test` deliberately excludes the eval suite (`addopts = -m 'not eval'`) because
 it needs the generated corpus and is slow. That exclusion meant

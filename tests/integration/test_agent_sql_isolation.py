@@ -18,17 +18,16 @@ Mirrors the connection/seed/skip pattern in ``test_api_dry_run.py``.
 
 from __future__ import annotations
 
-import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import text
 
-from fc.config import asyncpg_url, load_config
+from fc.config import load_config
 from fc.llm.sql_guard import guard
+from tests.integration.conftest import ADMIN, purge, run
 
 asyncpg = pytest.importorskip("asyncpg", reason="asyncpg is not installed")
 
@@ -38,78 +37,34 @@ _TENANT_B = "t_agent_sql_b"
 _USER_A = "u_agent_sql_a"
 _RUN_A = "run_agent_sql_a"
 _RUN_B = "run_agent_sql_b"
-
-
-def _owner_url() -> str:
-    cfg = load_config()
-    url = cfg.database_url or os.environ.get("DATABASE_URL", "")
-    if not url:
-        pytest.skip("no DATABASE_URL configured")
-    return asyncpg_url(url).replace("postgresql+asyncpg://", "postgresql://")
+_TENANTS = (_TENANT_A, _TENANT_B)
 
 
 def _run_async[T](body: Callable[[Any], Awaitable[T]]) -> T:
-    from api.deps import get_engine, get_readonly_sessionmaker, get_sessionmaker
+    """One shared loop, one shared admin connection — see conftest.
 
-    get_sessionmaker.cache_clear()
-    get_engine.cache_clear()
+    The read-only sessionmaker cache is still cleared, because these tests
+    change what ``DATABASE_URL_READONLY`` resolves to and a cached maker would
+    outlive that; the engine cache is not, since one loop for the session keeps
+    its pool valid.
+    """
+    from api.deps import get_readonly_sessionmaker
+
     get_readonly_sessionmaker.cache_clear()
 
     async def main() -> T:
-        conn = _Admin(_owner_url())
+        conn = ADMIN
+        await _seed(conn)
         try:
-            await conn.fetchval("SELECT 1")
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            pytest.skip(f"database unreachable: {exc}")
-        try:
-            await _seed(conn)
             return await body(conn)
         finally:
-            await _cleanup(conn)
-            await conn.close()
+            await purge(conn, _TENANTS)
 
-    return asyncio.run(main())
-
-
-class _Admin:
-    """An owner connection that reconnects if Neon drops it.
-
-    These tests interleave short bursts of admin SQL with long stretches of
-    HTTP work, and the HTTP work runs on a *different* pool — so the admin
-    connection sits idle for minutes and the free tier eventually closes it.
-    The failure surfaces as ``InterfaceError: connection is closed`` in whichever
-    test happened to be running, which reads like a bug in that test and is not
-    one. Reconnecting on demand puts the flake where it belongs: nowhere.
-    """
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-        self._conn: Any = None
-
-    async def _live(self) -> Any:
-        if self._conn is None or self._conn.is_closed():
-            self._conn = await asyncio.wait_for(asyncpg.connect(self._url), timeout=20)
-        return self._conn
-
-    async def execute(self, *args: Any) -> Any:
-        return await (await self._live()).execute(*args)
-
-    async def fetch(self, *args: Any) -> Any:
-        return await (await self._live()).fetch(*args)
-
-    async def fetchrow(self, *args: Any) -> Any:
-        return await (await self._live()).fetchrow(*args)
-
-    async def fetchval(self, *args: Any) -> Any:
-        return await (await self._live()).fetchval(*args)
-
-    async def close(self) -> None:
-        if self._conn is not None and not self._conn.is_closed():
-            await self._conn.close()
+    return cast("T", run(main))
 
 
 async def _seed(conn: Any) -> None:
-    await _cleanup(conn)
+    await purge(conn, _TENANTS)
     for tenant, run_id in ((_TENANT_A, _RUN_A), (_TENANT_B, _RUN_B)):
         await conn.execute(
             "INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')",
@@ -146,13 +101,7 @@ async def _seed(conn: Any) -> None:
 
 
 async def _cleanup(conn: Any) -> None:
-    for tenant in (_TENANT_A, _TENANT_B):
-        await conn.execute("DELETE FROM audit_events WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM exceptions WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM transaction_events WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM runs WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM users WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM tenants WHERE tenant_id = $1", tenant)
+    await purge(conn, _TENANTS)
 
 
 def test_a_mutating_statement_that_bypassed_the_guard_is_refused_by_postgres() -> None:

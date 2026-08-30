@@ -14,20 +14,20 @@ fact that ``/agent/execute`` goes through the same endpoint a click does.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from fc.config import asyncpg_url, load_config
+from fc.config import load_config
 from fc.llm.client import LLMClient, RawResponse
+from tests.integration.conftest import ADMIN, purge, run
 
 asyncpg = pytest.importorskip("asyncpg", reason="asyncpg is not installed")
 
@@ -39,15 +39,8 @@ _EXC = "exc_agent_flow"
 _BIG_EXC = "exc_agent_flow_big"
 _CLUSTER = "cls_agent_flow"
 _JWT_ALGORITHM = "HS256"
+_TENANTS = (_TENANT,)
 _BIG_AMOUNT = 5_200_000  # ₹52,000 — above the typed-confirmation threshold
-
-
-def _owner_url() -> str:
-    cfg = load_config()
-    url = cfg.database_url or os.environ.get("DATABASE_URL", "")
-    if not url:
-        pytest.skip("no DATABASE_URL configured")
-    return asyncpg_url(url).replace("postgresql+asyncpg://", "postgresql://")
 
 
 def _require_jwt_secret() -> Any:
@@ -85,43 +78,6 @@ def _stub_client(tmp_dir: str, call: dict[str, Any]) -> LLMClient:
     )
 
 
-class _Admin:
-    """An owner connection that reconnects if Neon drops it.
-
-    These tests interleave short bursts of admin SQL with long stretches of
-    HTTP work, and the HTTP work runs on a *different* pool — so the admin
-    connection sits idle for minutes and the free tier eventually closes it.
-    The failure surfaces as ``InterfaceError: connection is closed`` in whichever
-    test happened to be running, which reads like a bug in that test and is not
-    one. Reconnecting on demand puts the flake where it belongs: nowhere.
-    """
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-        self._conn: Any = None
-
-    async def _live(self) -> Any:
-        if self._conn is None or self._conn.is_closed():
-            self._conn = await asyncio.wait_for(asyncpg.connect(self._url), timeout=20)
-        return self._conn
-
-    async def execute(self, *args: Any) -> Any:
-        return await (await self._live()).execute(*args)
-
-    async def fetch(self, *args: Any) -> Any:
-        return await (await self._live()).fetch(*args)
-
-    async def fetchrow(self, *args: Any) -> Any:
-        return await (await self._live()).fetchrow(*args)
-
-    async def fetchval(self, *args: Any) -> Any:
-        return await (await self._live()).fetchval(*args)
-
-    async def close(self) -> None:
-        if self._conn is not None and not self._conn.is_closed():
-            await self._conn.close()
-
-
 def _resolve_call(exception_id: str = _EXC) -> dict[str, Any]:
     return {
         "name": "resolve",
@@ -134,39 +90,36 @@ def _resolve_call(exception_id: str = _EXC) -> dict[str, Any]:
 
 
 def _run_async[T](body: Callable[[Any, AsyncClient], Awaitable[T]], call: dict[str, Any]) -> T:
-    from api.deps import get_engine, get_llm_client, get_sessionmaker
+    """One shared loop, one shared admin connection — see conftest.
+
+    The engine cache is deliberately *not* cleared per test any more: with a
+    single loop for the session the pool stays valid, and rebuilding it cost
+    about a second of Singapore round trip every time.
+    """
+    from api.deps import get_llm_client
     from api.main import app
     from api.routers.agent import _COMMANDS
 
-    get_sessionmaker.cache_clear()
-    get_engine.cache_clear()
     _COMMANDS.clear()
 
     async def main() -> T:
-        conn = _Admin(_owner_url())
-        try:
-            await conn.fetchval("SELECT 1")
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            pytest.skip(f"database unreachable: {exc}")
-        import tempfile
-
+        conn = ADMIN
+        await _seed(conn)
         with tempfile.TemporaryDirectory() as tmp:
             app.dependency_overrides[get_llm_client] = lambda: _stub_client(tmp, call)
             try:
-                await _seed(conn)
                 transport = ASGITransport(app=app)
                 async with AsyncClient(transport=transport, base_url="http://test") as client:
                     return await body(conn, client)
             finally:
                 app.dependency_overrides.pop(get_llm_client, None)
-                await _cleanup(conn)
-                await conn.close()
+                await purge(conn, _TENANTS)
 
-    return asyncio.run(main())
+    return cast("T", run(main))
 
 
 async def _seed(conn: Any) -> None:
-    await _cleanup(conn)
+    await purge(conn, _TENANTS)
     await conn.execute(
         "INSERT INTO tenants (tenant_id, name, status) VALUES ($1, 'agent flow', 'active')",
         _TENANT,
@@ -215,15 +168,7 @@ async def _seed(conn: Any) -> None:
 
 
 async def _cleanup(conn: Any) -> None:
-    await conn.execute("DELETE FROM llm_calls WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM rules WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM audit_events WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM exceptions WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM clusters WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM transaction_events WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM runs WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM users WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM tenants WHERE tenant_id = $1", _TENANT)
+    await purge(conn, _TENANTS)
 
 
 def _headers() -> dict[str, str]:

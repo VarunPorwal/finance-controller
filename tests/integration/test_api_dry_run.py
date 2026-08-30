@@ -11,17 +11,16 @@ path via ``api.main.app``.
 
 from __future__ import annotations
 
-import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from fc.config import asyncpg_url, load_config
+from fc.config import load_config
+from tests.integration.conftest import ADMIN, purge, run
 
 asyncpg = pytest.importorskip("asyncpg", reason="asyncpg is not installed")
 
@@ -32,46 +31,31 @@ _USER_A = "u_api_dry_run_a"
 _USER_B = "u_api_dry_run_b"
 _RUN_A = "run_api_dry_run_a"
 _JWT_ALGORITHM = "HS256"
-
-
-def _owner_url() -> str:
-    cfg = load_config()
-    url = cfg.database_url or os.environ.get("DATABASE_URL", "")
-    if not url:
-        pytest.skip("no DATABASE_URL configured")
-    return asyncpg_url(url).replace("postgresql+asyncpg://", "postgresql://")
+_TENANTS = (_TENANT_A, _TENANT_B)
 
 
 def _run_async[T](body: Callable[[Any], Awaitable[T]]) -> T:
-    # api.deps.get_engine/get_sessionmaker are lru_cache'd singletons, and
-    # SQLAlchemy's async engine binds its connection pool to the event loop
-    # it was first used on. Each test here gets its own asyncio.run() (this
-    # module's convention, matching test_rules_immutability.py), so a cached
-    # engine from a prior test would still be holding connections against an
-    # event loop that's now closed. Clearing the cache forces a fresh engine
-    # bound to *this* run's loop.
-    from api.deps import get_engine, get_sessionmaker
+    """One shared loop and one shared admin connection — see conftest.
 
-    get_sessionmaker.cache_clear()
-    get_engine.cache_clear()
+    Every test used to clear ``get_engine``'s cache because a per-test
+    ``asyncio.run`` left the previous pool bound to a closed loop. With one loop
+    for the session that is no longer true, and not clearing it is worth about a
+    second per test in connection setup.
+    """
 
     async def main() -> T:
+        conn = ADMIN
+        await _seed(conn)
         try:
-            conn = await asyncio.wait_for(asyncpg.connect(_owner_url()), timeout=20)
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            pytest.skip(f"database unreachable: {exc}")
-        try:
-            await _seed(conn)
             return await body(conn)
         finally:
-            await _cleanup(conn)
-            await conn.close()
+            await purge(conn, _TENANTS)
 
-    return asyncio.run(main())
+    return cast("T", run(main))
 
 
 async def _seed(conn: Any) -> None:
-    await _cleanup(conn)
+    await purge(conn, _TENANTS)
     for tenant, user in ((_TENANT_A, _USER_A), (_TENANT_B, _USER_B)):
         await conn.execute(
             "INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')",
@@ -97,13 +81,7 @@ async def _seed(conn: Any) -> None:
 
 
 async def _cleanup(conn: Any) -> None:
-    for tenant in (_TENANT_A, _TENANT_B):
-        await conn.execute("DELETE FROM audit_events WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM exceptions WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM transaction_events WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM runs WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM users WHERE tenant_id = $1", tenant)
-        await conn.execute("DELETE FROM tenants WHERE tenant_id = $1", tenant)
+    await purge(conn, _TENANTS)
 
 
 async def _insert_event(

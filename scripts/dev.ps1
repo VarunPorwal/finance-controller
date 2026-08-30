@@ -19,8 +19,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'api', 'web', 'check', 'demo', 'demo-local', 'eval', 'migrate',
-                 'generate', 'test', 'lint', 'typecheck', 'client', 'help')]
+    [ValidateSet('setup', 'api', 'web', 'fast', 'check', 'demo', 'demo-local', 'eval',
+                 'migrate', 'generate', 'test', 'lint', 'typecheck', 'client', 'help')]
     [string]$Target = 'help',
 
     [int]$Seed = 42,
@@ -67,6 +67,7 @@ function Show-Help {
         'lint'       = 'ruff check + ruff format --check'
         'typecheck'  = 'mypy --strict engine/src'
         'client'     = 'regenerate web/lib/api.ts from the OpenAPI schema'
+        'fast'       = 'lint + typecheck + unit tests; no DB, no network (iteration loop)'
     }
     foreach ($name in $targets.Keys) {
         Write-Host ('  {0,-12} {1}' -f $name, $targets[$name])
@@ -121,18 +122,41 @@ function Invoke-Eval {
     Invoke-Step uv run python -m fc.eval.report
 }
 
-function Invoke-Check {
+function Invoke-Fast {
     <#
-      Everything that gates a commit. `test` deliberately excludes the eval suite
-      (it needs the generated corpus and is slow), which meant the
-      false_auto_resolutions gate - the merge blocker this whole submission rests
-      on - ran only when somebody typed `pytest -m eval` by hand. Run this, not
-      `test`.
+      The iteration loop: lint, types and unit tests. No database, no network,
+      no eval corpus. Under a minute, so it can be run after every edit.
+
+      This is NOT a gate. It cannot be: the integration suite is where RLS, the
+      read-only transaction, dry_run and the audit chain are actually proven,
+      and none of that can run without Postgres. Use `check` before committing.
     #>
     Invoke-Lint
     Invoke-Typecheck
-    Invoke-Test
-    Invoke-Eval
+    Invoke-Step uv run pytest tests/unit
+}
+
+function Invoke-Check {
+    <#
+      Everything that gates a commit: `fast`, plus the integration suite and the
+      eval gates.
+
+      FC_REQUIRE_DB turns a skipped integration test into a failure. pytest
+      counts a skip as success, and on 29 Aug a green run had 21-29 integration
+      tests silently skipped because Neon was cold - which meant the RLS and
+      read-only-transaction proofs had never executed on the run used to justify
+      them. A skipped test is an unrun proof; this makes the gate say so.
+    #>
+    $saved = $env:FC_REQUIRE_DB
+    $env:FC_REQUIRE_DB = '1'
+    try {
+        Invoke-Lint
+        Invoke-Typecheck
+        Invoke-Test
+        Invoke-Eval
+    } finally {
+        $env:FC_REQUIRE_DB = $saved
+    }
 }
 
 function Invoke-Migrate {
@@ -169,6 +193,7 @@ try {
         'web'        { Invoke-Web }
         'demo'       { Invoke-Demo }
         'demo-local' { Invoke-DemoLocal }
+        'fast'       { Invoke-Fast }
         'check'      { Invoke-Check }
         'eval'       { Invoke-Eval }
         'migrate'    { Invoke-Migrate }

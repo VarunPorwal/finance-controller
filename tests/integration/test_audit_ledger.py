@@ -16,18 +16,18 @@ narrower claim that the application's own role can't do this either.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from fc.audit.ledger import GENESIS_HASH, HASH_MISMATCH, SEQUENCE_GAP, append_batch, verify_chain
 from fc.config import asyncpg_url, load_config
+from tests.integration.conftest import ADMIN, purge, run
 
 asyncpg = pytest.importorskip("asyncpg", reason="asyncpg is not installed")
 
@@ -35,6 +35,7 @@ _AT = datetime(2026, 8, 29, tzinfo=UTC)
 _TENANT = "t_audit_ledger_test"
 _USER = "u_audit_ledger_test"
 _RUN = "run_audit_ledger_test"
+_TENANTS = (_TENANT,)
 
 
 def _plain_url(url: str) -> str:
@@ -56,23 +57,21 @@ def _app_url() -> str | None:
 
 
 def _run_async[T](body: Callable[[Any], Awaitable[T]]) -> T:
+    """One shared loop, one shared admin connection — see conftest."""
+
     async def main() -> T:
+        conn = ADMIN
+        await _seed(conn)
         try:
-            conn = await asyncio.wait_for(asyncpg.connect(_owner_url()), timeout=20)
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            pytest.skip(f"database unreachable: {exc}")
-        try:
-            await _seed(conn)
             return await body(conn)
         finally:
-            await _cleanup(conn)
-            await conn.close()
+            await purge(conn, _TENANTS)
 
-    return asyncio.run(main())
+    return cast("T", run(main))
 
 
 async def _seed(conn: Any) -> None:
-    await _cleanup(conn)
+    await purge(conn, _TENANTS)
     await conn.execute(
         "INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')",
         _TENANT,
@@ -97,10 +96,7 @@ async def _seed(conn: Any) -> None:
 
 
 async def _cleanup(conn: Any) -> None:
-    await conn.execute("DELETE FROM audit_events WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM runs WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM users WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM tenants WHERE tenant_id = $1", _TENANT)
+    await purge(conn, _TENANTS)
 
 
 def _sample_entries(n: int = 5) -> list[dict[str, Any]]:

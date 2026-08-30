@@ -20,23 +20,24 @@ shows that even the role that can bypass every policy cannot rewrite history.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from fc.config import asyncpg_url, load_config
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
+from tests.integration.conftest import ADMIN, purge, run
 
 asyncpg = pytest.importorskip("asyncpg", reason="asyncpg is not installed")
 
 _AT = datetime(2026, 8, 29, tzinfo=UTC)
 _TENANT = "t_rules_immutability_test"
+_TENANTS = (_TENANT,)
 _USER = "u_rules_immutability_test"
 _RULE = "test_immutable_rule"
 
@@ -52,25 +53,21 @@ def _database_url() -> str:
 
 
 def _run[T](body: Callable[[Any], Awaitable[T]]) -> T:
-    """Connect, run ``body``, always clean up. Skips if the database is unreachable."""
+    """One shared loop, one shared admin connection — see conftest."""
 
     async def main() -> T:
+        conn = ADMIN
+        await _seed(conn)
         try:
-            conn = await asyncio.wait_for(asyncpg.connect(_database_url()), timeout=20)
-        except (TimeoutError, OSError, asyncpg.PostgresError) as exc:
-            pytest.skip(f"database unreachable: {exc}")
-        try:
-            await _seed(conn)
             return await body(conn)
         finally:
-            await _cleanup(conn)
-            await conn.close()
+            await purge(conn, _TENANTS)
 
-    return asyncio.run(main())
+    return cast("T", run(main))
 
 
 async def _seed(conn: Any) -> None:
-    await _cleanup(conn)
+    await purge(conn, _TENANTS)
     await conn.execute(
         "INSERT INTO tenants (tenant_id, name, status) VALUES ($1, $2, 'active')",
         _TENANT,
@@ -87,9 +84,7 @@ async def _seed(conn: Any) -> None:
 
 
 async def _cleanup(conn: Any) -> None:
-    await conn.execute("DELETE FROM rules WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM users WHERE tenant_id = $1", _TENANT)
-    await conn.execute("DELETE FROM tenants WHERE tenant_id = $1", _TENANT)
+    await purge(conn, _TENANTS)
 
 
 async def _insert_rule(conn: Any, *, version: int, status: str) -> None:
