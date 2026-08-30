@@ -354,6 +354,10 @@ class HealthOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tiers: dict[str, list[dict[str, Any]]]
+    #: Per-model RPD used/limit/remaining, deduplicated by quota bucket. The
+    #: Flash models allow 20 requests a day each, so this is the number that
+    #: matters on demo day.
+    budget: dict[str, Any]
     mode: str
     degraded: bool
     health_scope: str
@@ -1348,6 +1352,7 @@ async def agent_health(
     snapshot = client.health_snapshot()
     return HealthOut(
         tiers=snapshot["tiers"],
+        budget=snapshot["budget"],
         mode=snapshot["mode"],
         degraded=snapshot["degraded"],
         health_scope=snapshot["health_scope"],

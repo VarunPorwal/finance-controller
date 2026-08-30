@@ -104,6 +104,34 @@ def test_a_400_becomes_a_schema_failure_so_the_router_rotates_rather_than_retrie
         _classify(_response(400, body="Invalid JSON payload received"))
 
 
+def test_a_413_too_large_is_a_rate_limit_not_a_schema_failure() -> None:
+    """Groq's tokens-per-minute ceiling arrives as a 413 whose body says
+    ``rate_limit_exceeded`` — a quota condition wearing a payload-size status
+    code.
+
+    Regression test for a real one: with 8192 reserved for output, the
+    command-parse request came to 10392 tokens against an 8000 TPM limit and was
+    refused before it ran. Classified as a schema failure it rotated without
+    tripping, so both fallback models were asked the same over-large question
+    in turn and the log blamed the schema.
+    """
+    body = (
+        '{"error":{"message":"Request too large for model `openai/gpt-oss-120b` ... on '
+        'tokens per minute (TPM): Limit 8000, Requested 10392","code":"rate_limit_exceeded"}}'
+    )
+    with pytest.raises(RateLimited) as caught:
+        _classify(_response(413, headers={"retry-after": "12"}, body=body))
+    assert caught.value.retry_after == 12.0
+
+
+def test_the_groq_output_reservation_leaves_room_for_the_prompt() -> None:
+    """Groq counts requested ``max_tokens`` toward TPM, not tokens produced, so
+    an over-generous reservation is spent whether or not it is used."""
+    from fc.llm.groq import MAX_OUTPUT_TOKENS
+
+    assert MAX_OUTPUT_TOKENS <= 4096, "the reservation is large enough to trip the 8000 TPM cap"
+
+
 def test_a_404_model_not_found_is_a_config_error_not_a_schema_failure() -> None:
     """A dead model id and a rejected schema want opposite treatment.
 

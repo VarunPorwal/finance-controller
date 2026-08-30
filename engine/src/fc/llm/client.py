@@ -112,35 +112,106 @@ def load_prompt(name: str) -> str:
 # Groq's free tier. They are the *input to the headroom margin*, not a hard
 # limit we rely on: the router fails over at 85% of RPM and 90% of RPD, so a
 # figure that is slightly optimistic costs a rotation, not a visible 429.
+#: Free-tier limits, verified against AI Studio 29 Aug 2026, and every id
+#: verified against the live catalogue with a structured-output call.
+#:
+#: The Flash tier is the constrained one: **20 requests per day, per model.**
+#: That is what makes round-robin load-bearing here rather than tidy — one
+#: model alone would exhaust the daily budget in twenty calls, and four in
+#: rotation give eighty. Every usable id is listed for that reason; a subset
+#: would be leaving quota on the table for no benefit.
+FLASH_RPM, FLASH_RPD = 5, 20
+LITE_RPM, LITE_RPD = 15, 500
+
+#: Ids checked and deliberately excluded:
+#:
+#: * ``gemini-3-flash`` — 404, not in this account's catalogue at all.
+#: * ``gemini-flash-lite-latest`` — an **alias**: its response reports
+#:   ``modelVersion=gemini-3.5-flash-lite``, which is already in the light tier.
+#:   Aliases resolve server-side to a numbered model and share its bucket, so it
+#:   would add a name and no capacity while making the budget look larger.
+#: * ``gemini-flash-latest`` — the same alias pattern (pointer-style version
+#:   metadata, no date stamp); excluded for the same reason.
+#: * ``llama-3.3-70b-versatile`` — 404 on this Groq account; no Llama chat
+#:   model is available, only the prompt-guard classifiers.
 TIERS: dict[str, tuple[ModelSpec, ...]] = {
     "light": (
-        ModelSpec("gemini", "gemini-3.5-flash-lite", "low", rpm_limit=30, rpd_limit=1500),
-        ModelSpec("gemini", "gemini-3.1-flash-lite", "low", rpm_limit=30, rpd_limit=1500),
+        ModelSpec(
+            "gemini",
+            "gemini-3.5-flash-lite",
+            "low",
+            multimodal=True,
+            rpm_limit=LITE_RPM,
+            rpd_limit=LITE_RPD,
+        ),
+        ModelSpec(
+            "gemini",
+            "gemini-3.1-flash-lite",
+            "low",
+            multimodal=True,
+            rpm_limit=LITE_RPM,
+            rpd_limit=LITE_RPD,
+        ),
+        ModelSpec(
+            "gemini",
+            "gemini-3.1-flash-lite-preview",
+            "low",
+            multimodal=True,
+            rpm_limit=LITE_RPM,
+            rpd_limit=LITE_RPD,
+        ),
     ),
     "standard": (
         ModelSpec(
-            "gemini", "gemini-3.6-flash", "low", multimodal=True, rpm_limit=15, rpd_limit=1000
+            "gemini",
+            "gemini-3.7-flash",
+            "low",
+            multimodal=True,
+            rpm_limit=FLASH_RPM,
+            rpd_limit=FLASH_RPD,
         ),
         ModelSpec(
-            "gemini", "gemini-3.7-flash", "low", multimodal=True, rpm_limit=15, rpd_limit=1000
+            "gemini",
+            "gemini-3.6-flash",
+            "low",
+            multimodal=True,
+            rpm_limit=FLASH_RPM,
+            rpd_limit=FLASH_RPD,
         ),
         ModelSpec(
-            "gemini", "gemini-3.5-flash", "low", multimodal=True, rpm_limit=15, rpd_limit=1000
+            "gemini",
+            "gemini-3.5-flash",
+            "low",
+            multimodal=True,
+            rpm_limit=FLASH_RPM,
+            rpd_limit=FLASH_RPD,
+        ),
+        ModelSpec(
+            "gemini",
+            "gemini-3-flash-preview",
+            "low",
+            multimodal=True,
+            rpm_limit=FLASH_RPM,
+            rpd_limit=FLASH_RPD,
         ),
     ),
     "deep": (
         # Guard (§7.3): thinking-token cost blowup. ``high`` appears here and
-        # nowhere else, and only ``rule_draft`` routes to this tier — asserted
-        # by ``test_only_rule_draft_can_reach_a_high_thinking_model``.
-        ModelSpec("gemini", "gemini-3.6-flash", "high", rpm_limit=15, rpd_limit=1000),
-        ModelSpec("gemini", "gemini-3.7-flash", "high", rpm_limit=15, rpd_limit=1000),
+        # nowhere else, and only ``rule_draft`` routes to this tier.
+        #
+        # These are the *same four models* as ``standard`` at a higher reasoning
+        # budget, so they share its quota — see ModelSpec.quota_key. The tier
+        # adds reasoning depth, not capacity.
+        ModelSpec("gemini", "gemini-3.7-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.6-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.5-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
+        ModelSpec(
+            "gemini", "gemini-3-flash-preview", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD
+        ),
     ),
     "fallback": (
-        # Verified against this account's /models on 29 Aug 2026. The PRD named
-        # llama-3.3-70b-versatile, which this account cannot reach at all —
-        # Groq's catalogue here carries no Llama chat model, only the two
-        # prompt-guard classifiers. Both gpt-oss models answered a strict
-        # json_schema request in under a second.
+        # A separate provider and therefore a genuinely separate budget — which
+        # is most of why the fallback tier is worth having at all.
         ModelSpec(
             "groq", "openai/gpt-oss-120b", "none", multimodal=False, rpm_limit=30, rpd_limit=1000
         ),
@@ -374,7 +445,7 @@ class Tier:
                 # for a task it cannot perform.
                 if not m.satisfies(requires):
                     continue
-                if not health[m.key].available():
+                if not health[m.quota_key].available():
                     continue
                 # The cursor advances on every successful pick, not only on
                 # failure. This is what makes it round-robin rather than
@@ -591,8 +662,10 @@ class LLMClient:
         self._sink = sink
         self._providers: dict[str, Any] = dict(providers or {})
         self.tiers = {name: Tier(name, models) for name, models in TIERS.items()}
+        # Keyed on ``quota_key``, so standard and deep share one counter for
+        # the model they share. See ModelSpec.quota_key.
         self.health = {
-            spec.key: ModelHealth(spec.rpm_limit, spec.rpd_limit, monotonic=monotonic)
+            spec.quota_key: ModelHealth(spec.rpm_limit, spec.rpd_limit, monotonic=monotonic)
             for models in TIERS.values()
             for spec in models
         }
@@ -727,7 +800,7 @@ class LLMClient:
         key: str,
     ) -> LLMResult | None:
         """One model, once. ``None`` means "rotate"; it never means "retry me"."""
-        health = self.health[spec.key]
+        health = self.health[spec.quota_key]
         position = tier.position_of(spec)
         t0 = self._monotonic()
         try:
@@ -863,12 +936,15 @@ class LLMClient:
         for name, models in TIERS.items():
             rows: list[dict[str, Any]] = []
             for spec in models:
-                h = self.health[spec.key]
+                h = self.health[spec.quota_key]
                 rows.append(
                     {
                         "model": spec.model,
                         "provider": spec.provider,
                         "thinking": spec.thinking,
+                        # Two tiers can hold one model; this says which rows
+                        # are looking at the same bucket.
+                        "quota_key": spec.quota_key,
                         "available": h.available(),
                         "rpm_used": h.rpm_used,
                         "rpm_limit": h.rpm_limit,
@@ -889,11 +965,57 @@ class LLMClient:
             tiers[name] = rows
         return {
             "tiers": tiers,
+            "budget": self.budget(),
             "mode": self.cfg.llm_mode,
             "degraded": self.degraded,
             # Guard (§7.3): quota undercount. Stated in the API, not only in a
             # docstring, so "how does this scale" has an honest answer on screen.
             "health_scope": "process",
+        }
+
+    def budget(self) -> dict[str, Any]:
+        """Daily request budget, deduplicated by quota bucket.
+
+        The Flash models allow twenty requests a day *each*, so on demo day the
+        question is not "is anything broken" but "how many calls do I have
+        left" — and the answer has to be visible at a glance rather than
+        inferred from four tier listings that repeat the same model twice.
+
+        Rows are keyed on ``quota_key``, so ``gemini-3.6-flash`` appears once
+        even though ``standard`` and ``deep`` both route to it.
+        """
+        seen: dict[str, ModelSpec] = {}
+        for models in TIERS.values():
+            for spec in models:
+                seen.setdefault(spec.quota_key, spec)
+
+        per_model: list[dict[str, Any]] = []
+        for quota_key, spec in seen.items():
+            h = self.health[quota_key]
+            per_model.append(
+                {
+                    "model": spec.model,
+                    "provider": spec.provider,
+                    "rpd_used": h.day_count,
+                    "rpd_limit": spec.rpd_limit,
+                    # What the router will actually use before failing over —
+                    # the headroom margin is the real ceiling, not the limit.
+                    "rpd_usable": int(spec.rpd_limit * ModelHealth.RPD_HEADROOM),
+                    "rpd_remaining": max(
+                        0, int(spec.rpd_limit * ModelHealth.RPD_HEADROOM) - h.day_count
+                    ),
+                    "rpm_used": h.rpm_used,
+                    "rpm_limit": spec.rpm_limit,
+                    "available": h.available(),
+                }
+            )
+        per_model.sort(key=lambda r: (r["provider"], r["model"]))
+        return {
+            "models": per_model,
+            "requests_remaining_today": sum(r["rpd_remaining"] for r in per_model),
+            "gemini_requests_remaining_today": sum(
+                r["rpd_remaining"] for r in per_model if r["provider"] == "gemini"
+            ),
         }
 
     @property

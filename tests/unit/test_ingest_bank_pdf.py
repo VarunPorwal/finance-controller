@@ -314,10 +314,8 @@ async def test_the_capability_gate_never_offers_a_pdf_to_a_text_only_model(
     tmp_path: Path,
 ) -> None:
     client, provider = _client(tmp_path, GOOD)
-    for key, health in client.health.items():
-        if not any(m.multimodal for tier in TIERS.values() for m in tier if m.key == key):
-            continue
-        health.trip_for_session()
+    for spec in (m for tier in TIERS.values() for m in tier if m.multimodal):
+        client.health[spec.quota_key].trip_for_session()
     with pytest.raises(ExtractionUnavailable):
         await _extract(client)
-    assert provider.calls == 0
+    assert provider.calls == 0, "a text-only model was asked to read a PDF"

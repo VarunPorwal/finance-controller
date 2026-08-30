@@ -105,13 +105,26 @@ class ModelSpec:
 
     @property
     def key(self) -> str:
-        """Health is tracked per (provider, model, thinking level).
-
-        The thinking level belongs in the key because ``deep`` and ``standard``
-        name the same underlying model at different reasoning budgets, and a
-        cooldown earned by one is not evidence about the other.
-        """
+        """Identity for routing: two tiers may hold the same model at different
+        reasoning budgets, and those are different *choices*."""
         return f"{self.provider}:{self.model}:{self.thinking}"
+
+    @property
+    def quota_key(self) -> str:
+        """Identity for **health and quota**, which is per model, not per choice.
+
+        ``standard`` and ``deep`` both hold ``gemini-3.6-flash``; the provider
+        counts their calls against one 20-RPD bucket, so the router must too.
+        Keying health on :attr:`key` instead would track two counters over one
+        limit and believe it had twice the budget it has — which at 20 requests
+        a day is the difference between failing over cleanly and walking into a
+        429 mid-demo.
+
+        A cooldown is shared for the same reason: a 503 from an overloaded
+        model is a fact about the backend, and the backend does not care which
+        thinking level asked.
+        """
+        return f"{self.provider}:{self.model}"
 
     def satisfies(self, requires: Capabilities) -> bool:
         """Capability gate (§7.2). A model may only serve a task it can perform."""

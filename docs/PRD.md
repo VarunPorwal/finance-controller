@@ -2301,33 +2301,44 @@ Plain round-robin sends hard work to weak models. A pure ladder drains the top m
 ### Tier definitions
 
 ```python
+# Free-tier limits, AI Studio, verified 29 Aug 2026:
+#   Flash      (3.7, 3.6, 3.5, 3-preview)   5 RPM / 250K TPM /  20 RPD each
+#   Flash-Lite (3.5, 3.1, 3.1-preview)     15 RPM / 250K TPM / 500 RPD each
+#
+# Twenty requests a day per Flash model is what makes round-robin load-bearing
+# rather than tidy: one model alone exhausts the daily budget in twenty calls,
+# four in rotation give eighty. Every usable id is listed for that reason.
+FLASH_RPM, FLASH_RPD = 5, 20
+LITE_RPM, LITE_RPD = 15, 500
+
 TIERS = {
     "light": [
-        # fast, cheap, generous quota — classification and extraction shape
-        ModelSpec("gemini", "gemini-3.5-flash-lite", thinking="low",
-                  structured=True, functions=True, multimodal=True),
-        ModelSpec("gemini", "gemini-3.1-flash-lite", thinking="low",
-                  structured=True, functions=True, multimodal=True),
+        # 1500 RPD combined — the tier that absorbs cluster labels and
+        # explanations without touching the Flash budget.
+        ModelSpec("gemini", "gemini-3.5-flash-lite", thinking="low", rpd=LITE_RPD),
+        ModelSpec("gemini", "gemini-3.1-flash-lite", thinking="low", rpd=LITE_RPD),
+        ModelSpec("gemini", "gemini-3.1-flash-lite-preview", thinking="low", rpd=LITE_RPD),
     ],
     "standard": [
-        # accuracy-sensitive but not reasoning-heavy
-        ModelSpec("gemini", "gemini-3.6-flash", thinking="low",
-                  structured=True, functions=True, multimodal=True),
-        ModelSpec("gemini", "gemini-3.7-flash", thinking="low",
-                  structured=True, functions=True, multimodal=True),
-        ModelSpec("gemini", "gemini-3.5-flash", thinking="low",
-                  structured=True, functions=True, multimodal=True),
+        # 80 RPD combined with rotation, against 20 without it.
+        ModelSpec("gemini", "gemini-3.7-flash", thinking="low", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.6-flash", thinking="low", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.5-flash", thinking="low", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3-flash-preview", thinking="low", rpd=FLASH_RPD),
     ],
     "deep": [
-        # genuine reasoning over historical patterns
-        ModelSpec("gemini", "gemini-3.6-flash", thinking="high", ...),
-        ModelSpec("gemini", "gemini-3.7-flash", thinking="high", ...),
+        # The same four models at a higher reasoning budget. This tier adds
+        # depth, NOT capacity — it shares standard's quota. See below.
+        ModelSpec("gemini", "gemini-3.7-flash", thinking="high", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.6-flash", thinking="high", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3.5-flash", thinking="high", rpd=FLASH_RPD),
+        ModelSpec("gemini", "gemini-3-flash-preview", thinking="high", rpd=FLASH_RPD),
     ],
     "fallback": [
-        ModelSpec("groq", "openai/gpt-oss-120b", structured=True,
-                  functions=True, multimodal=False),
-        ModelSpec("groq", "openai/gpt-oss-20b", structured=True,
-                  functions=True, multimodal=False),
+        # A separate provider, so a genuinely separate budget — which is most of
+        # why the fallback tier is worth having.
+        ModelSpec("groq", "openai/gpt-oss-120b", structured=True, functions=True),
+        ModelSpec("groq", "openai/gpt-oss-20b", structured=True, functions=True),
     ],
 }
 
@@ -2343,36 +2354,55 @@ TASK_ROUTE = {
 }
 ```
 
-### Model ids, verified 29 Aug 2026
+### Model ids and limits, verified 29 Aug 2026
 
 Every id above was checked against the live `ListModels` endpoint on both
-providers and confirmed with a real structured-output call. This is worth
-recording because the ids in this document were originally written from
-documentation rather than from the API, and one of them was wrong.
+providers and confirmed with a structured-output call. This is recorded because
+the ids in this document were originally written from documentation rather than
+from the API, and two of them were wrong.
 
-**Gemini — all five ids verified correct.** `gemini-3.5-flash-lite`,
-`gemini-3.1-flash-lite`, `gemini-3.6-flash` and `gemini-3.5-flash` each
-returned schema-conformant JSON and a well-formed function call.
-`gemini-3.7-flash` exists and is a valid id, but currently answers 503
-`UNAVAILABLE` ("experiencing high demand") on every attempt — a transient
-server condition, which the router already classifies as such and trips only
-after three consecutive failures. It is kept in the standard and deep tiers on
-that basis. The `gemini-2.5-*` generation now returns 404 "no longer available
-to new users", and every Pro, image and video model returns 429 quota-exceeded,
-which is consistent with this document's existing position that Pro is not free.
+**Gemini.** The five originally named ids all exist and work.
+`gemini-3.7-flash` currently answers 503 `UNAVAILABLE` ("high demand") on every
+attempt — a transient server condition the router already classifies as such
+and trips only after three consecutive failures, so it stays. The
+`gemini-2.5-*` generation returns 404 "no longer available to new users", and
+every Pro, image and video model returns 429, consistent with this document's
+position that Pro is not free.
 
-**Groq — the original id was wrong.** `llama-3.3-70b-versatile` returns 404
-`model_not_found`; this account's catalogue carries no Llama chat model at all,
-only the two `llama-prompt-guard-2` classifiers. The fallback tier is now
-`openai/gpt-oss-120b` and `openai/gpt-oss-20b`, both of which answered a strict
-`json_schema` request in under a second. `groq/compound` and `compound-mini`
-are agentic routers with different semantics and are deliberately not used.
+**Excluded, and why.** `gemini-3-flash` is not in the catalogue at all (404).
+`gemini-flash-latest` and `gemini-flash-lite-latest` are **aliases**: the
+latter's response reports `modelVersion=gemini-3.5-flash-lite`, a model already
+in the light tier. An alias resolves server-side to a numbered model and is
+counted against that model's bucket, so listing both adds a name and no
+capacity — and, worse, makes the remaining-budget figure on `/agent/health`
+overstate itself. A test asserts no `-latest` id is in `TIERS`.
 
-The failure this produced is worth keeping in mind: a wrong model id is a 404,
-and a 404 was originally classified as a schema failure — which rotates without
-tripping, so every subsequent call paid full latency to rediscover the same
-dead endpoint while the log blamed the schema. §7.2's failure table now carries
-a separate row for it.
+**Groq.** `llama-3.3-70b-versatile` returns 404 `model_not_found`; this
+account's catalogue carries no Llama chat model at all, only the two
+`llama-prompt-guard-2` classifiers. The fallback tier is `openai/gpt-oss-120b`
+and `openai/gpt-oss-20b`, both of which answered a strict `json_schema` request
+in under a second. `groq/compound` and `compound-mini` are agentic routers with
+different semantics and are deliberately unused.
+
+### Quota is per model, not per tier entry
+
+`standard` and `deep` hold the same four Flash models at different reasoning
+budgets. The provider counts both against **one** 20-RPD bucket, so health and
+quota are keyed on `(provider, model)` — `ModelSpec.quota_key` — while routing
+identity stays `(provider, model, thinking)`.
+
+Keying health on the routing choice would track two counters over one limit and
+believe it had twice the budget available. At twenty requests a day that is the
+difference between an invisible failover and a 429 in front of an audience. The
+same reasoning applies to cooldowns: a 503 from an overloaded model is a fact
+about the backend, and the backend does not care which thinking level asked.
+
+`/agent/health` therefore reports a `budget` block deduplicated by quota bucket:
+nine distinct buckets across eleven tier entries, each with `rpd_used`,
+`rpd_limit`, `rpd_usable` (the limit after the 90% headroom margin) and
+`rpd_remaining`, plus a combined `requests_remaining_today`. That is the number
+worth looking at on demo day, and it is one line rather than four tier listings
+that repeat the same model twice.
 
 **Every route terminates in a non-LLM outcome.** That is what makes degradation honest rather than a failure.
 
@@ -3772,8 +3802,11 @@ LOG_LEVEL=INFO
 
 | Provider | Model class | Free tier | Structured output | Functions | Multimodal | Thinking | Role here |
 |---|---|---|---|---|---|---|---|
-| Google AI Studio | Flash | ✓ rate-limited | ✓ | ✓ | ✓ | ✓ | Primary |
-| Google AI Studio | Flash-Lite | ✓ rate-limited | ✓ | ✓ | ✓ | ✓ | Light-tier primary |
+| Google AI Studio | Flash — `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3-flash-preview` | ✓ **5 RPM / 250K TPM / 20 RPD each** | ✓ | ✓ | ✓ | ✓ | Standard and deep tiers; 80 RPD combined with rotation |
+| Google AI Studio | Flash-Lite — `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.1-flash-lite-preview` | ✓ **15 RPM / 250K TPM / 500 RPD each** | ✓ | ✓ | ✓ | ✓ | Light tier; 1500 RPD combined |
+| Google AI Studio | `gemini-embedding-001` | ✓ 100 RPM / 30K TPM / 1K RPD | — | — | — | — | CUT in §0.1; the route terminates at deterministic normalisation |
+| Google AI Studio | `gemini-flash-latest`, `gemini-flash-lite-latest` | — | — | — | — | — | **Aliases, not used.** `gemini-flash-lite-latest` reports `modelVersion=gemini-3.5-flash-lite`; an alias shares the numbered model's bucket, so it adds no capacity and would inflate the remaining-budget figure |
+| Google AI Studio | `gemini-3-flash`, `gemini-2.5-*` | — | — | — | — | — | Not available: `gemini-3-flash` 404s; the 2.5 generation returns "no longer available to new users" |
 | Google AI Studio | Pro | ✗ paid since Apr 2026 | ✓ | ✓ | ✓ | ✓ | Not used; nothing needs it |
 | Groq | `openai/gpt-oss-120b` | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback primary (text only) |
 | Groq | `openai/gpt-oss-20b` | ✓ rate-limited | ✓ | ✓ | ✗ | ✗ | Fallback second (text only) |
@@ -3913,7 +3946,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 | 3 | Time allotted per team for the demo? Script is 8 min and can compress to 5 | Yathu | 4 Sept |
 | 4 | Is a hosted URL required at submission, or is local acceptable? | Yathu | 3 Sept |
 | 5 | Should the corpus model a specific merchant vertical (D2C vs marketplace)? | Team | 28 Aug |
-| 6 | ~~Confirm free-tier RPM/RPD per model in AI Studio for router configuration~~ **Partly closed, 29 Aug 2026.** Model *ids* are now verified against both providers' live `/models` endpoints (§7.2). The RPM/RPD figures are **not** exposed by either API — `ListModels` returns token limits only, and Groq's returns context windows — so the numbers in `TIERS` remain the published documentation figures. That is tolerable because they are the input to a headroom margin rather than a limit relied on: the router fails over at 85% of RPM and 90% of RPD, so a figure that is slightly optimistic costs a rotation, not a visible 429. Revisit only if 429s start appearing in `llm_calls`. | Team | closed |
+| 6 | ~~Confirm free-tier RPM/RPD per model in AI Studio for router configuration~~ **Closed, 29 Aug 2026.** Ids verified against both providers' live `/models` endpoints; limits read from AI Studio and now set in `TIERS`: Flash 5 RPM / 250K TPM / 20 RPD each, Flash-Lite 15 RPM / 250K TPM / 500 RPD each, embedding 100 RPM / 30K TPM / 1K RPD. The 20-RPD Flash limit is why every usable id is listed rather than a subset — rotation turns 20 requests a day into 80. Neither API exposes these figures programmatically (`ListModels` returns token limits only), so they are transcribed from the console and feed the 85%/90% headroom margins; `/agent/health` reports live usage against them. | Team | closed |
 | 7 | Does any judging criterion reward code quality directly, or only the demo? | Yathu | 3 Sept |
 
 ---
@@ -3922,6 +3955,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 
 | Version | Date | Change |
 |---|---|---|
+| 3.5 | 29 Aug 2026 | **Tiers widened to the real quota, and quota keyed per model.** The free tier allows 20 requests per day *per Flash model*, which the original three-and-two tier layout could exhaust in a morning. Every usable id is now listed: light gains `gemini-3.1-flash-lite-preview` (1500 RPD combined), standard and deep gain `gemini-3-flash-preview` (80 RPD combined, against 20 without rotation). `gemini-3-flash` is excluded — not in the catalogue — and both `-latest` ids are excluded as **aliases**: `gemini-flash-lite-latest` reports `modelVersion=gemini-3.5-flash-lite`, so it shares that model's bucket and would have inflated the remaining-budget figure while adding no capacity. Health and quota are now keyed on `(provider, model)` rather than `(provider, model, thinking)`, because `standard` and `deep` are the same four models and the provider counts them against one bucket; the previous key tracked two counters over one limit and believed it had twice the budget. `/agent/health` gains a `budget` block — per-model RPD used/limit/usable/remaining, deduplicated by bucket, plus a combined total — so remaining capacity is one glance rather than an inference. Appendix H question 6 closed with the real figures. |
 | 3.4 | 29 Aug 2026 | **Model ids verified against the live APIs.** The ids in §7.2 and Appendix C were written from documentation and none had ever been called; a probe of the Groq fallback path found `llama-3.3-70b-versatile` returns 404 `model_not_found` — this account's Groq catalogue has no Llama chat model. The fallback tier is now `openai/gpt-oss-120b` and `openai/gpt-oss-20b`, both confirmed against a strict `json_schema` request. All five Gemini ids verified correct; `gemini-3.7-flash` is valid but currently 503 `UNAVAILABLE` under load, which the router already treats as transient. §7.2 gains a "Model ids, verified" subsection and a failure-table row: a 404 is a **configuration** error that trips the model for the session, not a schema failure that rotates without tripping — the original classification meant every later call paid full latency to rediscover a dead endpoint while the log blamed the schema. Appendix H question 6 partly closed: ids confirmed, RPM/RPD not exposed by either API and left as the published figures, which is safe because they feed a headroom margin rather than a hard limit. |
 | 3.3 | 29 Aug 2026 | **AI layer built.** §7.8: the text-to-SQL mechanism is now the RLS-scoped session plus a read-only transaction, not a dedicated read-only role — on Neon that role carries `rolbypassrls`, so the original design would have traded RLS away for a guarantee the transaction already gives, leaving one real layer where the text claimed three; `DATABASE_URL_READONLY` is optional hardening and `/agent/health` reports which layers are active. §7.3: the single-instance caveat now covers the parsed-command store as well as the health tracker (same cause, same fix, same release), and `health_scope: "process"` surfaces it in the API. Appendix A: `httpx` and `sqlglot` added as engine runtime dependencies, with the reasoning for hand-written REST adapters over the provider SDKs — the router's design turns on distinguishing HTTP failure modes that an SDK abstracts away. Appendix B: `LLM_CACHE_DIR` defaults to `./.llm-cache` (the POSIX default resolved to a Windows temp path on the build machine and disagreed with both `.env` files); `DATABASE_URL_READONLY` re-described. §3.7: added `fc/llm/injection.py`, `fc/llm/generate.py`, the `fc/agent/` package, `api/routers/agent.py` and `api/generation.py`. Generator: **scenario 19** seeds prompt-injection text into two real bank narrations so §10.3's detection is exercised against the corpus rather than a fixture. |
 | 1.0 | 27 Aug 2026 | Initial PRD |

@@ -252,8 +252,13 @@ def _classify(response: httpx.Response) -> None:
     status = response.status_code
     if status < 400:
         return
-    if status == 429:
-        raise RateLimited(response.text[:200], retry_after=_retry_after(response))
+    if status in (429, 413):
+        # 413 is Groq's "request too large for the tokens-per-minute limit". It
+        # is a quota condition wearing a payload-size status code — the body
+        # says ``rate_limit_exceeded`` — so it belongs here rather than with the
+        # schema failures, where it would rotate without tripping and every
+        # later call would re-send an over-large request to the same model.
+        raise RateLimited(response.text[:300], retry_after=_retry_after(response))
     if status in (401, 403):
         raise AuthError(f"{status}: {response.text[:200]}")
     if status == 404:

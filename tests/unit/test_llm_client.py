@@ -12,6 +12,7 @@ stands in for ``time.monotonic`` so cooldowns are tested without sleeping.
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +133,7 @@ async def test_the_cursor_advances_on_every_success_not_only_on_failure(tmp_path
             fallback=NARRATIVE,
         )
     light = [m.key for m in TIERS["light"]]
-    assert provider.calls == [light[0], light[1], light[0]]
+    assert provider.calls == light[:3], "the cursor did not advance across the tier"
 
 
 @pytest.mark.anyio
@@ -184,11 +185,11 @@ async def test_a_429_trips_the_model_for_its_retry_after_and_rotates(tmp_path: P
     await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
     assert provider.calls[0] == first.key
     assert len(provider.calls) == 2, "did not rotate to the next model in the tier"
-    assert client.health[first.key].tripped
+    assert client.health[first.quota_key].tripped
     clock.advance(44)
-    assert client.health[first.key].tripped, "recovered before Retry-After elapsed"
+    assert client.health[first.quota_key].tripped, "recovered before Retry-After elapsed"
     clock.advance(2)
-    assert client.health[first.key].available()
+    assert client.health[first.quota_key].available()
 
 
 @pytest.mark.anyio
@@ -200,9 +201,9 @@ async def test_a_429_without_a_retry_after_header_defaults_to_sixty_seconds(
     client, _ = _client(tmp_path, script={first.key: RateLimited("no header")}, clock=clock)
     await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
     clock.advance(59)
-    assert client.health[first.key].tripped
+    assert client.health[first.quota_key].tripped
     clock.advance(2)
-    assert client.health[first.key].available()
+    assert client.health[first.quota_key].available()
 
 
 @pytest.mark.anyio
@@ -218,33 +219,56 @@ async def test_a_schema_failure_rotates_immediately_and_is_not_a_transient_failu
         "narrative", prompt="p", tenant_id="t", schema=NarrativeOut, fallback=NARRATIVE
     )
     assert provider.calls == [first.key, TIERS["light"][1].key]
-    assert client.health[first.key].consecutive_failures == 0
-    assert not client.health[first.key].tripped
+    assert client.health[first.quota_key].consecutive_failures == 0
+    assert not client.health[first.quota_key].tripped
     assert result.terminal is False
 
 
 @pytest.mark.anyio
 async def test_three_timeouts_trip_the_model_and_one_does_not(tmp_path: Path) -> None:
+    """Every model in the tier times out, so each call lands one failure on each
+    of them — which keeps the assertion about the failure count rather than
+    about how many models happen to be in the tier this month."""
     clock = FakeClock()
-    first = TIERS["light"][0]
-    client, _ = _client(tmp_path, script={first.key: TimeoutError_("slow")}, clock=clock)
+    light = TIERS["light"]
+    client, _ = _client(tmp_path, script={m.key: TimeoutError_("slow") for m in light}, clock=clock)
     await client.call("narrative", prompt="a", tenant_id="t", fallback=NARRATIVE)
-    assert not client.health[first.key].tripped
+    assert not client.health[light[0].quota_key].tripped, "tripped on the first failure"
     await client.call("narrative", prompt="b", tenant_id="t", fallback=NARRATIVE)
-    assert not client.health[first.key].tripped
+    assert not client.health[light[0].quota_key].tripped
     await client.call("narrative", prompt="c", tenant_id="t", fallback=NARRATIVE)
-    assert client.health[first.key].tripped
+    assert client.health[light[0].quota_key].tripped, "did not trip on the third"
     clock.advance(121)
-    assert client.health[first.key].available()
+    assert client.health[light[0].quota_key].available()
 
 
 @pytest.mark.anyio
 async def test_a_5xx_is_treated_as_transient_like_a_timeout(tmp_path: Path) -> None:
-    first = TIERS["light"][0]
-    client, _ = _client(tmp_path, script={first.key: ServerError("502")})
+    light = TIERS["light"]
+    client, _ = _client(tmp_path, script={m.key: ServerError("502") for m in light})
     for prompt in "abc":
         await client.call("narrative", prompt=prompt, tenant_id="t", fallback=NARRATIVE)
-    assert client.health[first.key].tripped
+    assert client.health[light[0].quota_key].tripped
+
+
+def test_a_transient_failure_counter_trips_at_three_regardless_of_tier_width() -> None:
+    """The rule itself, with no rotation arithmetic in the way."""
+    health = ModelHealth(rpm_limit=10, rpd_limit=100, monotonic=FakeClock())
+    health.record_failure()
+    health.record_failure()
+    assert not health.tripped
+    health.record_failure()
+    assert health.tripped
+
+
+def test_a_success_clears_the_failure_counter() -> None:
+    health = ModelHealth(rpm_limit=10, rpd_limit=100, monotonic=FakeClock())
+    health.record_failure()
+    health.record_failure()
+    health.record_success()
+    health.record_failure()
+    health.record_failure()
+    assert not health.tripped, "two failures either side of a success added up"
 
 
 @pytest.mark.anyio
@@ -256,7 +280,7 @@ async def test_an_auth_error_trips_the_model_for_the_whole_session(tmp_path: Pat
     client, _ = _client(tmp_path, script={first.key: AuthError("401")}, clock=clock)
     await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
     clock.advance(10_000)
-    assert not client.health[first.key].available()
+    assert not client.health[first.quota_key].available()
 
 
 @pytest.mark.anyio
@@ -272,7 +296,7 @@ async def test_a_config_error_trips_the_model_for_the_session_like_an_auth_error
     )
     await client.call("narrative", prompt="p", tenant_id="t", fallback=NARRATIVE)
     clock.advance(10_000)
-    assert not client.health[first.key].available(), "a dead model id recovered on its own"
+    assert not client.health[first.quota_key].available(), "a dead model id recovered on its own"
     # And it rotated rather than failing the call.
     assert provider.calls[0] == first.key
     assert len(provider.calls) == 2
@@ -326,6 +350,79 @@ def test_the_daily_counter_resets_after_a_day() -> None:
     clock.advance(86_401)
     assert health.available()
     assert health.day_count == 0
+
+
+# --- quota (§7.3 quota undercount) -------------------------------------------
+
+
+def test_standard_and_deep_share_one_quota_bucket_per_model() -> None:
+    """The Flash models allow twenty requests a day *each*, and ``deep`` is the
+    same four models at a higher reasoning budget — so the provider counts both
+    tiers against one bucket and the router must too.
+
+    Keying health on the routing choice instead would track two counters over
+    one limit and believe it had twice the budget. At twenty requests a day that
+    is the difference between failing over cleanly and walking into a 429
+    mid-demo.
+    """
+    shared = {m.model for m in TIERS["standard"]} & {m.model for m in TIERS["deep"]}
+    assert shared, "standard and deep no longer overlap; this test is moot"
+    for model in shared:
+        std = next(m for m in TIERS["standard"] if m.model == model)
+        deep = next(m for m in TIERS["deep"] if m.model == model)
+        assert std.key != deep.key, "the two tiers must remain distinct choices"
+        assert std.quota_key == deep.quota_key, f"{model} is counted twice"
+
+
+@pytest.mark.anyio
+async def test_a_call_on_the_deep_tier_spends_the_standard_tiers_budget(
+    tmp_path: Path,
+) -> None:
+    """The above, demonstrated through the router rather than asserted about
+    the table."""
+    client, _ = _client(tmp_path)
+    shared = next(m for m in TIERS["deep"] if m.model in {s.model for s in TIERS["standard"]})
+    before = client.health[shared.quota_key].day_count
+    await client.call(
+        "rule_draft", prompt="p", tenant_id="t", requires=STRUCTURED, fallback=NARRATIVE
+    )
+    assert client.health[shared.quota_key].day_count == before + 1
+
+
+def test_the_budget_view_reports_each_model_once_with_its_real_headroom() -> None:
+    """What ``/agent/health`` shows on demo day: how many calls are left, per
+    model, deduplicated so a model in two tiers is not double-counted."""
+    client, _ = _client(Path(tempfile.mkdtemp()))
+    budget = client.budget()
+    models = budget["models"]
+    names = [r["model"] for r in models]
+    assert len(names) == len(set(names)), "a model appears twice in the budget view"
+    assert set(names) == {m.model for tier in TIERS.values() for m in tier}
+    for row in models:
+        # The headroom margin is the real ceiling, not the published limit.
+        assert row["rpd_usable"] == int(row["rpd_limit"] * ModelHealth.RPD_HEADROOM)
+        assert row["rpd_remaining"] == row["rpd_usable"] - row["rpd_used"]
+    assert budget["requests_remaining_today"] == sum(r["rpd_remaining"] for r in models)
+
+
+def test_no_tier_holds_an_alias_for_a_model_another_entry_already_covers() -> None:
+    """``gemini-flash-lite-latest`` reports ``modelVersion=gemini-3.5-flash-lite``
+    — an alias resolves server-side to a numbered model and shares its bucket,
+    so listing both adds a name and no capacity while making the budget look
+    larger than it is. Aliases are excluded by name."""
+    listed = {m.model for tier in TIERS.values() for m in tier}
+    assert not any(name.endswith("-latest") for name in listed), (
+        "an alias id is in TIERS; it shares quota with the model it points at"
+    )
+
+
+def test_the_flash_tier_is_wide_because_the_daily_limit_is_small() -> None:
+    """Round-robin is load-bearing here, not tidy: one Flash model alone is
+    twenty requests a day."""
+    standard = TIERS["standard"]
+    assert len(standard) >= 4, "the Flash tier was narrowed; the daily budget shrinks with it"
+    assert all(m.rpd_limit == 20 for m in standard)
+    assert sum(m.rpd_limit for m in standard) == 80
 
 
 # --- caching (§7.3 guards 2 and 10, §9.5) ------------------------------------
@@ -509,7 +606,7 @@ async def test_the_ledger_counts_calls_and_cache_hits_per_run(tmp_path: Path) ->
 async def test_degraded_is_true_while_any_model_is_tripped(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     assert client.degraded is False
-    client.health[TIERS["light"][0].key].trip(60)
+    client.health[TIERS["light"][0].quota_key].trip(60)
     assert client.degraded is True
 
 

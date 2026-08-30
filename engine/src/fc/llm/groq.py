@@ -28,6 +28,17 @@ __all__ = ["GroqAdapter"]
 
 _BASE_URL = "https://api.groq.com/openai/v1"
 
+#: Groq's free tier caps *tokens per minute* at 8000, and it counts the
+#: requested ``max_tokens`` toward that ceiling rather than the tokens actually
+#: produced. The command-parse prompt is around 2.2k tokens with the fourteen
+#: declarations attached, so reserving 8192 for output put the request at 10392
+#: and it was refused with a 413 before it ever ran.
+#:
+#: Every response this router asks for is a small structured object — a command,
+#: a SQL plan, a paragraph — so a large reservation was never buying anything.
+#: Sized to leave comfortable room for the prompt instead.
+MAX_OUTPUT_TOKENS = 2048
+
 
 class GroqAdapter:
     def __init__(self, cfg: Config, *, client: httpx.AsyncClient | None = None) -> None:
@@ -62,7 +73,7 @@ class GroqAdapter:
             "model": spec.model,
             "messages": messages,
             "temperature": 0,
-            "max_tokens": 8192,
+            "max_tokens": MAX_OUTPUT_TOKENS,
         }
         if tools:
             body["tools"] = [
