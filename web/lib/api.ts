@@ -2342,6 +2342,8 @@ export interface components {
              * @default 8
              */
             seed: number;
+            /** Ruleset Hash */
+            ruleset_hash?: string | null;
         };
         /** RerunCommand */
         RerunCommand: {

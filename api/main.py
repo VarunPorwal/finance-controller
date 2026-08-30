@@ -15,15 +15,17 @@ httpx/``ASGITransport`` test transport, which never sends that event. See
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import scheduler as scheduler_module
-from api.deps import get_config
+from api.deps import get_config, scoped_session
 from api.errors import register_exception_handlers
 from api.routers import (
     agent,
@@ -40,11 +42,48 @@ from api.routers import (
     runs,
 )
 from api.routers import eval as eval_router
+from api.ruleset import seed_rules_from_yaml
+from fc.config import Config
+
+
+async def _seed_rules(cfg: Config) -> None:
+    """Import data/rules/deductions.yaml into the ``rules`` table, once.
+
+    The YAML is a provision-time seed now, not a run-time read (api/ruleset.py).
+    Doing it here rather than in a migration keeps rules as data the Rulebook
+    owns — a migration would re-assert the file's opinion over anything a human
+    has since changed, which is exactly the coupling being removed. The import
+    is idempotent on ``(rule_id, version)``, so a redeploy is a no-op.
+
+    Failure is logged and swallowed: an API that will not start because a seed
+    file is unreadable is worse than one running on the rules already in the
+    table.
+    """
+    # No database configured means nothing to seed — and it keeps the promise
+    # that driving the lifespan (tests/unit/test_scheduler.py does exactly that)
+    # touches no database and no network. Without this guard the seed opened an
+    # asyncpg connection inside the no-DB unit suite.
+    if not cfg.tenant_id or not cfg.database_url:
+        return
+    try:
+        async with scoped_session(cfg.tenant_id, "owner") as session:
+            inserted = await seed_rules_from_yaml(
+                session, tenant_id=cfg.tenant_id, created_at=datetime.now(UTC)
+            )
+            await session.commit()
+        _LOG.info("rule seed: %d rule version(s) imported for %s", inserted, cfg.tenant_id)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("rule seed failed; continuing with the rules already in the table")
+
+
+_LOG = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    running = scheduler_module.start(get_config())
+    cfg = get_config()
+    await _seed_rules(cfg)
+    running = scheduler_module.start(cfg)
     try:
         yield
     finally:

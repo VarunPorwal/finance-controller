@@ -44,6 +44,7 @@ from api.deps import (
 from api.errors import ApiError
 from api.generation import generate_for_run
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
+from api.ruleset import COMPOSITION_KEY, resolve_ruleset
 from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
 from db.models import ExceptionRow, Run, TransactionEventRow
@@ -54,7 +55,6 @@ from fc.eval.corpus import load_corpus
 from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory, new_ulid
 from fc.pipeline import PIPELINE_STAGES, PipelineResult, run_pipeline
-from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -116,6 +116,12 @@ class ReplayRequest(BaseModel):
 
     reason: str
     seed: int = 8
+    #: Pin the replay to the ruleset a previous run used, by its
+    #: ``runs.ruleset_hash``. Omitted, the replay uses whatever is effective
+    #: now — which is the point of replaying after a rule change. PRD §5.3's
+    #: ``ruleset_version``: the hash is the version, and it now selects rather
+    #: than merely records.
+    ruleset_hash: str | None = None
 
 
 class ReplayOut(BaseModel):
@@ -401,7 +407,7 @@ async def create_run(
             return _run_out(existing_run)
 
     run_id = new_ulid("run_")
-    ruleset = load_rules(DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=started_at)
+    ruleset = await resolve_ruleset(session, tenant_id=user.tenant_id)
     issue_id = deterministic_factory(seed=body.seed, epoch_ms=int(started_at.timestamp() * 1000))
 
     # Secrets never land in an auditable JSONB column, even the config
@@ -420,7 +426,8 @@ async def create_run(
         started_at=started_at,
         status="running",
         ruleset_hash=ruleset.ruleset_hash,
-        input_hashes={"corpus": ruleset.ruleset_hash} if body.mode == "demo" else {},
+        input_hashes=({"corpus": ruleset.ruleset_hash} if body.mode == "demo" else {})
+        | {COMPOSITION_KEY: ruleset.composition},
         config=cfg.model_dump(mode="json", exclude=_SECRET_FIELDS),
     )
     session.add(run_row)
@@ -538,9 +545,8 @@ async def finalize_run(
         raise ApiError(409, "nothing to finalize", f"run {run_id} has no ingested events")
     events = [event_from_row(e) for e in event_rows]
 
-    ruleset = load_rules(
-        DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=run_row.started_at
-    )
+    ruleset = await resolve_ruleset(session, tenant_id=user.tenant_id)
+    run_row.input_hashes = dict(run_row.input_hashes or {}) | {COMPOSITION_KEY: ruleset.composition}
     issue_id = deterministic_factory(seed=7, epoch_ms=int(run_row.started_at.timestamp() * 1000))
     result = run_pipeline(
         events,
@@ -636,7 +642,9 @@ async def replay_run(
     events = [event_from_row(e) for e in parent_event_rows]
     parent_exceptions = [exception_from_row(e) for e in parent_exception_rows]
 
-    ruleset = load_rules(DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=datetime.now(UTC))
+    ruleset = await resolve_ruleset(
+        session, tenant_id=user.tenant_id, target_hash=body.ruleset_hash
+    )
     new_run_id = new_ulid("run_")
     started_at = datetime.now(UTC)
     issue_id = deterministic_factory(seed=body.seed, epoch_ms=int(started_at.timestamp() * 1000))
@@ -648,7 +656,10 @@ async def replay_run(
         started_at=started_at,
         status="running",
         ruleset_hash=ruleset.ruleset_hash,
-        input_hashes=dict(parent.input_hashes),
+        # The parent's other input hashes carry over; the ruleset composition
+        # is this run's own, so a replay under a changed ruleset records what
+        # it actually used rather than inheriting a stale claim.
+        input_hashes=dict(parent.input_hashes) | {COMPOSITION_KEY: ruleset.composition},
         config=dict(parent.config),
         parent_run_id=run_id,
         replay_reason=body.reason,
