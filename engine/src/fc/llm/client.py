@@ -162,14 +162,12 @@ TIERS: dict[str, tuple[ModelSpec, ...]] = {
         ),
     ),
     "standard": (
-        ModelSpec(
-            "gemini",
-            "gemini-3.7-flash",
-            "low",
-            multimodal=True,
-            rpm_limit=FLASH_RPM,
-            rpd_limit=FLASH_RPD,
-        ),
+        # Ordered by observed reliability for text_to_sql, not release order.
+        # gemini-3.7-flash sits last on purpose: every logged attempt this
+        # session timed out (0 successes), and position 0 here is also what
+        # ``refresh_context_cache`` pins the context cache to — putting a
+        # model with a 0% success rate there means every request pays its
+        # timeout before falling through to one that answers.
         ModelSpec(
             "gemini",
             "gemini-3.6-flash",
@@ -194,20 +192,28 @@ TIERS: dict[str, tuple[ModelSpec, ...]] = {
             rpm_limit=FLASH_RPM,
             rpd_limit=FLASH_RPD,
         ),
+        ModelSpec(
+            "gemini",
+            "gemini-3.7-flash",
+            "low",
+            multimodal=True,
+            rpm_limit=FLASH_RPM,
+            rpd_limit=FLASH_RPD,
+        ),
     ),
     "deep": (
         # Guard (§7.3): thinking-token cost blowup. ``high`` appears here and
         # nowhere else, and only ``rule_draft`` routes to this tier.
         #
-        # These are the *same four models* as ``standard`` at a higher reasoning
-        # budget, so they share its quota — see ModelSpec.quota_key. The tier
-        # adds reasoning depth, not capacity.
-        ModelSpec("gemini", "gemini-3.7-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
+        # These are the *same four models* as ``standard``, in the same
+        # order, at a higher reasoning budget — they share its quota, see
+        # ModelSpec.quota_key. The tier adds reasoning depth, not capacity.
         ModelSpec("gemini", "gemini-3.6-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
         ModelSpec("gemini", "gemini-3.5-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
         ModelSpec(
             "gemini", "gemini-3-flash-preview", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD
         ),
+        ModelSpec("gemini", "gemini-3.7-flash", "high", rpm_limit=FLASH_RPM, rpd_limit=FLASH_RPD),
     ),
     "fallback": (
         # A separate provider and therefore a genuinely separate budget — which
@@ -230,6 +236,12 @@ TIERS: dict[str, tuple[ModelSpec, ...]] = {
 TASK_ROUTE: dict[str, tuple[str, ...]] = {
     "command_parse": ("light", "standard", "fallback", "TERMINAL:form"),
     "text_to_sql": ("standard", "light", "fallback", "TERMINAL:refuse"),
+    # Same schema, same guard as text_to_sql — only the first rung differs.
+    # A single aggregate ("how much is at risk") doesn't need the standard
+    # tier's larger model; trying Flash-Lite first is the whole point of
+    # having a light tier, and quota is the reason this exists at all.
+    "text_to_sql_light": ("light", "standard", "fallback", "TERMINAL:refuse"),
+    "sql_narrate": ("light", "standard", "fallback", "TERMINAL:template"),
     "narrative": ("light", "fallback", "TERMINAL:template"),
     "cluster_label": ("light", "TERMINAL:template"),
     "explanation": ("light", "TERMINAL:template"),
@@ -242,7 +254,7 @@ TASK_ROUTE: dict[str, tuple[str, ...]] = {
 #: silently costs full input rate on an 8k-token system prompt. ``text_to_sql``
 #: therefore pins its first choice and rotates less evenly than the other
 #: purposes. A deliberate trade, recorded here rather than discovered later.
-CONTEXT_CACHED_PURPOSES: frozenset[str] = frozenset({"text_to_sql"})
+CONTEXT_CACHED_PURPOSES: frozenset[str] = frozenset({"text_to_sql", "text_to_sql_light"})
 
 
 # --- failures (§7.2 failure classification) ----------------------------------
@@ -339,6 +351,7 @@ class ModelHealth:
     day_started: float = -1.0
     cooldown_until: float | None = None
     consecutive_failures: int = 0
+    consecutive_timeouts: int = 0
     half_open: bool = False
 
     RPM_HEADROOM = 0.85
@@ -347,6 +360,7 @@ class ModelHealth:
     FAILURES_BEFORE_TRIP = 3
     TRANSIENT_COOLDOWN_S = 120.0
     DEFAULT_RATE_LIMIT_COOLDOWN_S = 60.0
+    TIMEOUTS_BEFORE_DEMOTE = 3
 
     def available(self) -> bool:
         now = self.monotonic()
@@ -368,6 +382,7 @@ class ModelHealth:
         self.minute_window.append(now)
         self.day_count += 1
         self.consecutive_failures = 0
+        self.consecutive_timeouts = 0
         self.half_open = False
 
     def record_failure(self) -> None:
@@ -375,6 +390,17 @@ class ModelHealth:
         self.consecutive_failures += 1
         if self.consecutive_failures >= self.FAILURES_BEFORE_TRIP:
             self.trip(self.TRANSIENT_COOLDOWN_S)
+
+    def record_timeout(self) -> bool:
+        """Distinct from ``consecutive_failures``/``trip``: cooldown is
+        temporary and expires on its own, so a model that times out, cools
+        down and times out again keeps landing back in the same rotation
+        slot. Returns ``True`` once three consecutive timeouts land, telling
+        the caller to demote the model to the back of its tier instead — a
+        model earns its slot back only by never being tried, not by waiting
+        out a cooldown."""
+        self.consecutive_timeouts += 1
+        return self.consecutive_timeouts >= self.TIMEOUTS_BEFORE_DEMOTE
 
     def trip(self, cooldown_s: float) -> None:
         # Guard (§7.3): cooldown storms. Per-model, doubled when a half-open
@@ -456,6 +482,15 @@ class Tier:
 
     def position_of(self, spec: ModelSpec) -> int:
         return self.models.index(spec)
+
+    def demote(self, spec: ModelSpec) -> None:
+        """Move ``spec`` to the back of the rotation for the rest of this
+        process's life — not a cooldown, which expires and puts it right
+        back where it started. Called once a model's consecutive-timeout
+        count crosses :attr:`ModelHealth.TIMEOUTS_BEFORE_DEMOTE`."""
+        with self._lock:
+            self.models = tuple(m for m in self.models if m.key != spec.key) + (spec,)
+            self._cursor = 0
 
 
 # --- terminals ---------------------------------------------------------------
@@ -822,7 +857,19 @@ class LLMClient:
             health.trip(exc.retry_after or ModelHealth.DEFAULT_RATE_LIMIT_COOLDOWN_S)
             self._log_failure(spec, tier, purpose, prompt_hash, tenant_id, run_id, "rate_limited")
             return None
-        except (TimeoutError_, ServerError):
+        except TimeoutError_:
+            health.record_failure()
+            if health.record_timeout():
+                tier.demote(spec)
+                _LOG.warning(
+                    "%s timed out %d times in a row; demoted to the back of tier %r",
+                    spec.key,
+                    ModelHealth.TIMEOUTS_BEFORE_DEMOTE,
+                    tier.name,
+                )
+            self._log_failure(spec, tier, purpose, prompt_hash, tenant_id, run_id, "timeout")
+            return None
+        except ServerError:
             health.record_failure()
             self._log_failure(spec, tier, purpose, prompt_hash, tenant_id, run_id, "timeout")
             return None
@@ -1046,7 +1093,11 @@ class LLMClient:
         """
         if self.cfg.llm_mode != "live":
             return None
-        spec = TIERS["standard"][0]
+        # ``self.tiers["standard"].models[0]``, not the static ``TIERS``
+        # constant — a session demotion reorders the live tier, and pinning
+        # against the stale order would put the cache right back on a model
+        # that just got moved to the back for timing out.
+        spec = self.tiers["standard"].models[0]
         try:
             name: str = await self._provider(spec.provider).create_context_cache(
                 spec,

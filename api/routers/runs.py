@@ -229,9 +229,10 @@ def _persist_pipeline_result(
     result: PipelineResult,
     persist_events: bool = True,
 ) -> None:
-    """``persist_events=False`` is for ``finalize_run``: the events already
-    exist as rows (ingested via ``POST /ingest/*`` before the pipeline ever
-    ran), and ``result.events`` is the exact same sequence passed in — a
+    """``persist_events=False`` is for ``finalize_run`` and ``replay_run``:
+    the events already exist as rows — ingested via ``POST /ingest/*`` before
+    the pipeline ran, or belonging to the parent run being replayed — and
+    ``result.events`` is the exact same sequence passed in either way. A
     second insert would collide on the primary key, not create anything new.
     """
     if persist_events:
@@ -572,6 +573,19 @@ async def replay_run(
     (the caller-specified target; PRD §5.3's ``ruleset_version`` selects a
     hash this build resolves to "whatever is active now", since there is no
     UI yet to pick an arbitrary historical version by hash).
+
+    The input never changes, so nothing about it is re-persisted:
+    ``_persist_pipeline_result`` runs with ``persist_events=False`` exactly
+    as ``finalize_run`` does. Two independent constraints make a second copy
+    impossible even if it were desired — ``transaction_events.event_id`` is
+    a bare primary key (one row per event, ever, not per run) and
+    ``ix_te_guid`` treats a ledger voucher as booked at most once per tenant
+    — so the new run's exceptions simply cite the parent run's own
+    ``event_id`` values. ``diff_exceptions`` depends on exactly this: it
+    matches "the same underlying transaction" across two runs by comparing
+    ``event_ids`` verbatim (see ``fc.audit.replay``'s module docstring), so
+    reusing them rather than minting fresh ones is what keeps the diff
+    correct, not an oversight to fix later.
     """
     parent = await _load(session, run_id)
     parent_event_rows = (
@@ -620,7 +634,11 @@ async def replay_run(
         created_at=started_at,
     )
     _persist_pipeline_result(
-        session, run_id=new_run_id, tenant_id=user.tenant_id, result=result.pipeline
+        session,
+        run_id=new_run_id,
+        tenant_id=user.tenant_id,
+        result=result.pipeline,
+        persist_events=False,
     )
 
     # Appendix E: replay supersedes -> every parent exception this diff
