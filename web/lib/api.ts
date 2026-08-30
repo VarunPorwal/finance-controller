@@ -186,6 +186,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize Run
+         * @description The other half of ``mode="empty"``: run the cascade over whatever the
+         *     ingest endpoints actually wrote for this run, then close it out exactly
+         *     the way ``create_run`` closes a demo-corpus run — same pipeline call,
+         *     same persistence, same post-run prose. Reads events back from the
+         *     database rather than taking them as a parameter, the same way
+         *     ``replay_run`` does, so this is the one place a run's stored events and
+         *     what actually got reconciled can never drift apart.
+         */
+        post: operations["finalize_run_api_v1_runs__run_id__finalize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/replay": {
         parameters: {
             query?: never;
@@ -1307,6 +1333,15 @@ export interface components {
             /** File */
             file: string;
         };
+        /** BreakOut */
+        BreakOut: {
+            /** Row */
+            row: number;
+            /** Expected Paise */
+            expected_paise: number;
+            /** Found Paise */
+            found_paise: number;
+        };
         /** BridgeSegmentOut */
         BridgeSegmentOut: {
             /** Label */
@@ -1474,6 +1509,12 @@ export interface components {
              * @default 7
              */
             seed: number;
+            /**
+             * Mode
+             * @default demo
+             * @enum {string}
+             */
+            mode: "demo" | "empty";
         };
         /**
          * DecisionDiff
@@ -1777,6 +1818,13 @@ export interface components {
             event_count: number;
             /** Rejections */
             rejections: components["schemas"]["RejectionOut"][];
+            /** Balanced */
+            balanced?: boolean | null;
+            /**
+             * Breaks
+             * @default []
+             */
+            breaks: components["schemas"]["BreakOut"][];
         };
         /** IngestStatusOut */
         IngestStatusOut: {
@@ -3167,6 +3215,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finalize_run_api_v1_runs__run_id__finalize_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunOut"];
                 };
             };
             /** @description Validation Error */

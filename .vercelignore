@@ -1,0 +1,14 @@
+# Only web/ is needed to build the frontend (rootDirectory=web). Everything
+# else is the Python engine/API/tests, which would otherwise bloat and slow
+# every upload for no reason — Vercel only ever builds the frontend.
+engine/
+api/
+db/
+tests/
+scripts/
+data/
+docs/
+.venv/
+.llm-cache/
+alembic/
+*.log

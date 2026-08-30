@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -93,6 +94,12 @@ class CreateRunRequest(BaseModel):
 
     label: str | None = None
     seed: int = 7
+    #: "demo" (default) loads the generated corpus from disk and reconciles
+    #: it synchronously, as before. "empty" creates an open run with no
+    #: events at all — the caller then ingests via POST /ingest/{razorpay,
+    #: bank,ledger} against this run_id and calls POST /runs/{run_id}/finalize
+    #: to run the cascade over whatever was actually uploaded.
+    mode: Literal["demo", "empty"] = "demo"
 
 
 class DiffOut(BaseModel):
@@ -215,44 +222,55 @@ async def get_run_progress(
 
 
 def _persist_pipeline_result(
-    session: AsyncSession, *, run_id: str, tenant_id: str, result: PipelineResult
+    session: AsyncSession,
+    *,
+    run_id: str,
+    tenant_id: str,
+    result: PipelineResult,
+    persist_events: bool = True,
 ) -> None:
-    for event in result.events:
-        session.add(
-            TransactionEventRow(
-                event_id=event.event_id,
-                run_id=run_id,
-                tenant_id=tenant_id,
-                source=event.source,
-                source_row_id=event.source_row_id,
-                amount_paise=event.amount_paise,
-                direction=event.direction,
-                currency=event.currency,
-                txn_date=event.txn_date,
-                value_date=event.value_date,
-                settled_at=event.settled_at,
-                utr=event.utr,
-                rrn=event.rrn,
-                settlement_id=event.settlement_id,
-                order_id=event.order_id,
-                payment_id=event.payment_id,
-                voucher_number=event.voucher_number,
-                voucher_guid=event.voucher_guid,
-                counterparty=event.counterparty,
-                counterparty_norm=event.counterparty_norm,
-                method=event.method,
-                rail=event.rail,
-                txn_type=event.txn_type,
-                raw_narration=event.raw_narration,
-                fee_paise=event.fee_paise,
-                tax_paise=event.tax_paise,
-                on_hold=event.on_hold,
-                ledger_account=event.ledger_account,
-                voucher_type=event.voucher_type,
-                raw=event.raw,
-                ingested_at=event.ingested_at,
+    """``persist_events=False`` is for ``finalize_run``: the events already
+    exist as rows (ingested via ``POST /ingest/*`` before the pipeline ever
+    ran), and ``result.events`` is the exact same sequence passed in — a
+    second insert would collide on the primary key, not create anything new.
+    """
+    if persist_events:
+        for event in result.events:
+            session.add(
+                TransactionEventRow(
+                    event_id=event.event_id,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    source=event.source,
+                    source_row_id=event.source_row_id,
+                    amount_paise=event.amount_paise,
+                    direction=event.direction,
+                    currency=event.currency,
+                    txn_date=event.txn_date,
+                    value_date=event.value_date,
+                    settled_at=event.settled_at,
+                    utr=event.utr,
+                    rrn=event.rrn,
+                    settlement_id=event.settlement_id,
+                    order_id=event.order_id,
+                    payment_id=event.payment_id,
+                    voucher_number=event.voucher_number,
+                    voucher_guid=event.voucher_guid,
+                    counterparty=event.counterparty,
+                    counterparty_norm=event.counterparty_norm,
+                    method=event.method,
+                    rail=event.rail,
+                    txn_type=event.txn_type,
+                    raw_narration=event.raw_narration,
+                    fee_paise=event.fee_paise,
+                    tax_paise=event.tax_paise,
+                    on_hold=event.on_hold,
+                    ledger_account=event.ledger_account,
+                    voucher_type=event.voucher_type,
+                    raw=event.raw,
+                    ingested_at=event.ingested_at,
+                )
             )
-        )
     for match in result.cascade.matches:
         session.add(
             MatchRow(
@@ -327,7 +345,6 @@ async def create_run(
     started_at = datetime.now(UTC)
     run_id = new_ulid("run_")
     ruleset = load_rules(DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=started_at)
-    corpus = load_corpus()
     issue_id = deterministic_factory(seed=body.seed, epoch_ms=int(started_at.timestamp() * 1000))
 
     # Secrets never land in an auditable JSONB column, even the config
@@ -346,12 +363,32 @@ async def create_run(
         started_at=started_at,
         status="running",
         ruleset_hash=ruleset.ruleset_hash,
-        input_hashes={"corpus": ruleset.ruleset_hash},
+        input_hashes={"corpus": ruleset.ruleset_hash} if body.mode == "demo" else {},
         config=cfg.model_dump(mode="json", exclude=_SECRET_FIELDS),
     )
     session.add(run_row)
     await session.flush()
 
+    if body.mode == "empty":
+        # No corpus, no pipeline: an open shell the ingest endpoints can
+        # write into. `finalize_run` is the only path from here to `complete`.
+        await append_audit(
+            session,
+            tenant_id=user.tenant_id,
+            actor=f"user:{user.user_id}",
+            action="run.create_empty",
+            subject_type="run",
+            subject_id=run_id,
+            payload={"label": body.label, "dry_run": dry_run},
+            created_at=started_at,
+            run_id=run_id,
+            ruleset_hash=ruleset.ruleset_hash,
+        )
+        result_out = _run_out(run_row)
+        await finish(session, dry_run=dry_run)
+        return result_out
+
+    corpus = load_corpus()
     result = run_pipeline(
         corpus.events,
         cfg=cfg,
@@ -392,6 +429,89 @@ async def create_run(
     # reconciled and persisted; this adds three batched calls' worth of
     # wording, and any failure inside leaves the deterministic label and
     # template in place. A dry run skips it — there would be no rows to label.
+    if not dry_run:
+        await generate_for_run(session, run_id=run_id, tenant_id=user.tenant_id, client=client)
+        await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+
+    result_out = _run_out(run_row)
+    await finish(session, dry_run=dry_run)
+    return result_out
+
+
+@router.post("/{run_id}/finalize", response_model=RunOut)
+async def finalize_run(
+    run_id: str,
+    dry_run: bool = Query(False),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+    cfg: Config = Depends(get_config),
+    client: LLMClient = Depends(get_llm_client),
+    buffer: LLMCallBuffer = Depends(get_llm_buffer),
+) -> RunOut:
+    """The other half of ``mode="empty"``: run the cascade over whatever the
+    ingest endpoints actually wrote for this run, then close it out exactly
+    the way ``create_run`` closes a demo-corpus run — same pipeline call,
+    same persistence, same post-run prose. Reads events back from the
+    database rather than taking them as a parameter, the same way
+    ``replay_run`` does, so this is the one place a run's stored events and
+    what actually got reconciled can never drift apart.
+    """
+    run_row = await _load(session, run_id)
+    if run_row.status not in ("queued", "running"):
+        raise ApiError(
+            409, "invalid state", f"run {run_id} is {run_row.status!r}, not open to finalize"
+        )
+    event_rows = (
+        await session.scalars(
+            select(TransactionEventRow).where(TransactionEventRow.run_id == run_id)
+        )
+    ).all()
+    if not event_rows:
+        raise ApiError(409, "nothing to finalize", f"run {run_id} has no ingested events")
+    events = [event_from_row(e) for e in event_rows]
+
+    ruleset = load_rules(
+        DEFAULT_RULES_PATH, tenant_id=user.tenant_id, created_at=run_row.started_at
+    )
+    issue_id = deterministic_factory(seed=7, epoch_ms=int(run_row.started_at.timestamp() * 1000))
+    result = run_pipeline(
+        events,
+        cfg=cfg,
+        rules=ruleset.rules,
+        run_id=run_id,
+        tenant_id=user.tenant_id,
+        issue_id=issue_id,
+        created_at=run_row.started_at,
+    )
+    _persist_pipeline_result(
+        session, run_id=run_id, tenant_id=user.tenant_id, result=result, persist_events=False
+    )
+
+    finished_at = datetime.now(UTC)
+    run_row.finished_at = finished_at
+    run_row.status = "complete"
+    run_row.record_count = len(result.events)
+    run_row.runtime_ms = int((finished_at - run_row.started_at).total_seconds() * 1000)
+    run_row.ruleset_hash = ruleset.ruleset_hash
+    await session.flush()
+
+    await append_audit(
+        session,
+        tenant_id=user.tenant_id,
+        actor=f"user:{user.user_id}",
+        action="run.finalize",
+        subject_type="run",
+        subject_id=run_id,
+        payload={
+            "record_count": run_row.record_count,
+            "exception_count": len(result.exceptions),
+            "match_count": len(result.cascade.matches),
+            "dry_run": dry_run,
+        },
+        created_at=finished_at,
+        run_id=run_id,
+        ruleset_hash=ruleset.ruleset_hash,
+    )
     if not dry_run:
         await generate_for_run(session, run_id=run_id, tenant_id=user.tenant_id, client=client)
         await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)

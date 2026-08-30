@@ -1,0 +1,27 @@
+name: Keep API alive
+
+# Render's free plan spins the service down after ~15 minutes idle, and the
+# in-process scheduler (api/scheduler.py's keep_alive_job) can't prevent that
+# — it sleeps when Render sleeps. This is the external pinger: a request
+# every 10 minutes keeps the instance warm so the first real request of a
+# demo isn't the one paying the cold-start cost.
+#
+# Picked over UptimeRobot: this needs no new account or email verification,
+# and the repo already runs GitHub Actions for CI.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://finance-controller-api-09yw.onrender.com/health)
+          echo "status: $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning::finance-controller-api /health returned $code"
+          fi

@@ -5,6 +5,7 @@ import { useRun } from "@/lib/run-context";
 import { formatDurationMs, formatRunTimestamp } from "@/lib/format";
 import { StatusStrip } from "@/components/status-strip";
 import { TabNav, type TabKey } from "@/components/tab-nav";
+import { IngestPanel } from "@/components/ingest-panel";
 
 export function AppShell({
   reconcile,
@@ -16,6 +17,7 @@ export function AppShell({
   ask: React.ReactNode;
 }) {
   const [tab, setTab] = useState<TabKey>("reconcile");
+  const [ingestOpen, setIngestOpen] = useState(false);
   const { summary, loading, error, refresh } = useRun();
 
   return (
@@ -43,7 +45,7 @@ export function AppShell({
           </div>
           <button
             type="button"
-            onClick={refresh}
+            onClick={() => setIngestOpen(true)}
             className="border-rule bg-ink-800 hover:bg-ink-700 rounded-md border px-3 py-1.5 text-sm font-medium text-paper-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue"
           >
             Run
@@ -60,6 +62,16 @@ export function AppShell({
         <div hidden={tab !== "rulebook"}>{rulebook}</div>
         <div hidden={tab !== "ask"}>{ask}</div>
       </main>
+
+      {ingestOpen && (
+        <IngestPanel
+          onClose={() => setIngestOpen(false)}
+          onComplete={() => {
+            setIngestOpen(false);
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

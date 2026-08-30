@@ -20,3 +20,4 @@ data/generated/
 web/lib/openapi.json
 
 .claude/worktrees/
+.vercel

@@ -41,7 +41,7 @@ from fc.ingest.detect import detect_bank_format
 from fc.ingest.narration.hdfc import HdfcNarrationParser
 from fc.ingest.razorpay import parse_razorpay_recon
 from fc.ingest.tally import parse_tally_csv
-from fc.ingest.validators import Rejection
+from fc.ingest.validators import Break, Rejection
 from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory
 from fc.models.transaction import TransactionEvent
@@ -57,12 +57,29 @@ class RejectionOut(BaseModel):
     field_count: int
 
 
+class BreakOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row: int
+    expected_paise: int
+    found_paise: int
+
+
 class IngestOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
     event_count: int
     rejections: list[RejectionOut]
+    #: Bank rows only (PRD §6.1/§7.7) — ``None`` for razorpay/ledger, where
+    #: there is no running balance to check. A CSV statement that fails this
+    #: still ingests (the export is a trusted structured format); a PDF
+    #: extraction that fails is refused outright before this endpoint ever
+    #: returns — see the 422 in ``_extract_pdf``, whose body carries the same
+    #: ``breaks`` shape for the same reason: showing which row broke, not a
+    #: generic error, is the point (PRD §7.7).
+    balanced: bool | None = None
+    breaks: list[BreakOut] = []
 
 
 class IngestStatusOut(BaseModel):
@@ -82,6 +99,10 @@ class RejectionsOut(BaseModel):
 
 def _rejection_out(r: Rejection) -> RejectionOut:
     return RejectionOut(source_row_id=r.source_row_id, reason=r.reason, field_count=len(r.fields))
+
+
+def _break_out(b: Break) -> BreakOut:
+    return BreakOut(row=b.row, expected_paise=b.expected, found_paise=b.found)
 
 
 async def _load_open_run(session: AsyncSession, run_id: str) -> Run:
@@ -240,6 +261,8 @@ async def ingest_bank(
         run_id=run_id,
         event_count=len(result.events),
         rejections=[_rejection_out(r) for r in result.rejections],
+        balanced=bank_result.balanced,
+        breaks=[_break_out(b) for b in bank_result.breaks],
     )
 
 
