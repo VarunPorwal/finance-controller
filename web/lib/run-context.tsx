@@ -31,8 +31,12 @@ export function RunProvider({ children }: { children: ReactNode }) {
     async function load() {
       setLoading(true);
       setError(null);
+      // The newest *original, complete* run — not the newest row of any kind.
+      // A replay is a what-if and a run still open for ingestion has nothing
+      // reconciled yet; landing on either is how the app came to open on a
+      // screen with no bridge and no records.
       const { data: runs, error: listError } = await apiClient.GET("/api/v1/runs", {
-        params: { query: { limit: 1 } },
+        params: { query: { limit: 1, kind: "original", status: "complete" } },
       });
       if (cancelled) return;
       if (listError || !runs || runs.items.length === 0) {

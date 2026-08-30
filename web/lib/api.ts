@@ -118,7 +118,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Runs */
+        /**
+         * List Runs
+         * @description ``kind`` filters on replay lineage, ``status`` on run state.
+         *
+         *     The frontend asks for ``kind=original&status=complete`` because "the
+         *     current state of the books" is the newest real reconciliation, not the
+         *     newest what-if replay and not a run that is still open for ingestion. It
+         *     used to take the newest row of any kind, which is how the app came to open
+         *     on a replay.
+         */
         get: operations["list_runs_api_v1_runs_get"];
         put?: never;
         /** Create Run */
@@ -3094,6 +3103,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string | null;
+                kind?: "all" | "original" | "replay";
+                status?: string | null;
             };
             header?: {
                 authorization?: string | null;

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.converters import event_from_row, exception_from_row
 from api.deps import db_session
 from api.errors import ApiError
+from api.run_scope import event_source_run_id
 from db.models import ExceptionRow, TransactionEventRow
 from fc.cash.bridge import CashBridge, compute_cash_bridge
 
@@ -69,9 +70,12 @@ def _bridge_out(run_id: str, bridge: CashBridge) -> CashBridgeOut:
 
 
 async def _compute(session: AsyncSession, run_id: str) -> CashBridge:
+    # A replay cites its parent's events (api/run_scope.py). Filtering on
+    # run_id alone is what made this endpoint 404 on every replayed run.
+    event_run_id = await event_source_run_id(session, run_id)
     events = (
         await session.scalars(
-            select(TransactionEventRow).where(TransactionEventRow.run_id == run_id)
+            select(TransactionEventRow).where(TransactionEventRow.run_id == event_run_id)
         )
     ).all()
     if not events:

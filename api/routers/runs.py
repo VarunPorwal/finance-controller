@@ -44,6 +44,7 @@ from api.deps import (
 from api.errors import ApiError
 from api.generation import generate_for_run
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
+from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
 from db.models import ExceptionRow, Run, TransactionEventRow
 from db.models import Match as MatchRow
@@ -143,13 +144,35 @@ def _run_out(row: Run) -> RunOut:
     )
 
 
+#: Exception statuses a replay carries forward from its parent. A human
+#: decision survives a recomputation; "superseded" and "open" are the
+#: engine's own bookkeeping and do not.
+_CARRIED_STATUSES = frozenset({"resolved", "written_off"})
+
+
 @router.get("", response_model=Page[RunOut])
 async def list_runs(
     limit: int = Query(DEFAULT_LIMIT, le=MAX_LIMIT, gt=0),
     cursor: str | None = None,
+    kind: Literal["all", "original", "replay"] = "all",
+    status: str | None = None,
     session: AsyncSession = Depends(db_session),
 ) -> Page[RunOut]:
+    """``kind`` filters on replay lineage, ``status`` on run state.
+
+    The frontend asks for ``kind=original&status=complete`` because "the
+    current state of the books" is the newest real reconciliation, not the
+    newest what-if replay and not a run that is still open for ingestion. It
+    used to take the newest row of any kind, which is how the app came to open
+    on a replay.
+    """
     stmt = select(Run).order_by(Run.started_at.desc(), Run.run_id.desc())
+    if kind == "original":
+        stmt = stmt.where(Run.parent_run_id.is_(None))
+    elif kind == "replay":
+        stmt = stmt.where(Run.parent_run_id.is_not(None))
+    if status is not None:
+        stmt = stmt.where(Run.status == status)
     if cursor is not None:
         stmt = stmt.where(Run.run_id < decode_cursor(cursor))
     rows = (await session.scalars(stmt.limit(limit + 1))).all()
@@ -196,7 +219,14 @@ async def get_run_summary(
     )
     return RunSummaryOut(
         run=_run_out(row),
-        event_count=await _count(session, TransactionEventRow, TransactionEventRow.run_id, run_id),
+        # Through the lineage: a replay cites its parent's events, so counting
+        # on run_id alone reported 0 records under a record_count of 1571.
+        event_count=await _count(
+            session,
+            TransactionEventRow,
+            TransactionEventRow.run_id,
+            await event_source_run_id(session, run_id),
+        ),
         match_count=await _count(session, MatchRow, MatchRow.run_id, run_id),
         exception_count=await _count(session, ExceptionRow, ExceptionRow.run_id, run_id),
         cluster_count=await _count(session, ClusterRow, ClusterRow.run_id, run_id),
@@ -588,9 +618,13 @@ async def replay_run(
     correct, not an oversight to fix later.
     """
     parent = await _load(session, run_id)
+    # Through the lineage, so replaying a replay works: the grandparent owns
+    # the rows and every generation cites them (api/run_scope.py).
     parent_event_rows = (
         await session.scalars(
-            select(TransactionEventRow).where(TransactionEventRow.run_id == run_id)
+            select(TransactionEventRow).where(
+                TransactionEventRow.run_id == await event_source_run_id(session, run_id)
+            )
         )
     ).all()
     if not parent_event_rows:
@@ -641,6 +675,42 @@ async def replay_run(
         persist_events=False,
     )
 
+    # A replay recomputes the engine's opinion; it must not silently undo a
+    # human's. fc.audit.replay deliberately excludes lifecycle fields from the
+    # diff and starts every recomputed exception at status="open" (that is the
+    # engine staying pure), which left the caller to carry the decision across
+    # — and nothing did. Sixteen resolutions and two write-offs on the demo run
+    # reverted to open on every replay.
+    #
+    # event_ids is the key for the same reason diff_exceptions uses it: it
+    # identifies the same underlying transaction across runs, where
+    # exception_id and signature do not.
+    await session.flush()
+    prior_decisions = {
+        tuple(sorted(e.event_ids)): e
+        for e in parent_exception_rows
+        if e.status in _CARRIED_STATUSES
+    }
+    carried = 0
+    for exc in result.pipeline.exceptions:
+        prior = prior_decisions.get(tuple(sorted(exc.event_ids)))
+        if prior is None:
+            continue
+        await session.execute(
+            update(ExceptionRow)
+            .where(ExceptionRow.exception_id == exc.exception_id)
+            .values(
+                status=prior.status,
+                resolved_by=prior.resolved_by,
+                resolved_by_user=prior.resolved_by_user,
+                resolved_via=prior.resolved_via,
+                resolution_reason=prior.resolution_reason,
+                resolution_category=prior.resolution_category,
+                resolved_at=prior.resolved_at,
+            )
+        )
+        carried += 1
+
     # Appendix E: replay supersedes -> every parent exception this diff
     # touched (changed or removed) is superseded by the new run's decision.
     superseded_ids = [
@@ -675,6 +745,7 @@ async def replay_run(
             "changed": len(result.diff.changed),
             "added": len(result.diff.added),
             "removed": len(result.diff.removed),
+            "resolutions_carried": carried,
             "dry_run": dry_run,
         },
         created_at=finished_at,

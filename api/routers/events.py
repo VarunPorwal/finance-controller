@@ -17,6 +17,7 @@ from api.converters import event_from_row
 from api.deps import db_session
 from api.errors import ApiError
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
+from api.run_scope import event_source_run_id
 from db.models import TransactionEventRow
 from fc.models.transaction import Direction, Source, TransactionEvent
 
@@ -45,7 +46,9 @@ async def list_events(
 ) -> Page[TransactionEvent]:
     stmt = select(TransactionEventRow).order_by(TransactionEventRow.event_id.desc())
     if run_id is not None:
-        stmt = stmt.where(TransactionEventRow.run_id == run_id)
+        # Resolve through the lineage so ?run_id=<a replay> lists the events
+        # that replay actually reconciled rather than nothing.
+        stmt = stmt.where(TransactionEventRow.run_id == await event_source_run_id(session, run_id))
     if source is not None:
         stmt = stmt.where(TransactionEventRow.source == source)
     if direction is not None:

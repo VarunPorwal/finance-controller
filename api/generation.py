@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.converters import cluster_from_row, exception_from_row
+from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
 from db.models import ExceptionRow, Run, TransactionEventRow
 from db.models import Match as MatchRow
@@ -135,6 +136,8 @@ async def _run_facts(session: AsyncSession, *, run_id: str) -> RunFacts:
     """
     run = await session.get(Run, run_id)
     record_count = run.record_count if run and run.record_count is not None else 0
+    # Gross and bank below sum source rows, which a replay does not own.
+    event_run_id = await event_source_run_id(session, run_id)
 
     matched = (
         await session.scalar(
@@ -179,7 +182,7 @@ async def _run_facts(session: AsyncSession, *, run_id: str) -> RunFacts:
     gross = (
         await session.scalar(
             select(func.coalesce(func.sum(TransactionEventRow.amount_paise), 0)).where(
-                TransactionEventRow.run_id == run_id,
+                TransactionEventRow.run_id == event_run_id,
                 TransactionEventRow.source == "razorpay",
                 TransactionEventRow.direction == "credit",
             )
@@ -188,7 +191,7 @@ async def _run_facts(session: AsyncSession, *, run_id: str) -> RunFacts:
     bank = (
         await session.scalar(
             select(func.coalesce(func.sum(TransactionEventRow.amount_paise), 0)).where(
-                TransactionEventRow.run_id == run_id,
+                TransactionEventRow.run_id == event_run_id,
                 TransactionEventRow.source == "bank",
                 TransactionEventRow.direction == "credit",
             )

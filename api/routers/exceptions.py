@@ -224,8 +224,17 @@ async def get_evidence(
             select(TransactionEventRow).where(TransactionEventRow.event_id.in_(row.event_ids))
         )
     ).all()
+    # Scoped to the exception's own run. Without it the overlap predicate
+    # returned the same logical match once per run that had ever reconciled
+    # these events — four identical "Exact ref 100%" rows in the evidence pack
+    # after four runs, growing by one on every reconciliation.
     matches = (
-        await session.scalars(select(MatchRow).where(MatchRow.event_ids.overlap(row.event_ids)))
+        await session.scalars(
+            select(MatchRow).where(
+                MatchRow.run_id == row.run_id,
+                MatchRow.event_ids.overlap(row.event_ids),
+            )
+        )
     ).all()
     return ExceptionEvidenceOut(
         exception=exception_from_row(row, narrations=[e.raw_narration for e in events]),
