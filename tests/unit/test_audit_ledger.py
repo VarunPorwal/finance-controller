@@ -15,13 +15,13 @@ import pytest
 from fc.audit.ledger import (
     GENESIS_HASH,
     HASH_MISMATCH,
-    SEQUENCE_GAP,
     AuditEventInput,
     append,
     append_batch,
     canonical_json,
     compute_hash,
     normalize_payload,
+    sequence_gaps,
     verify_chain,
 )
 
@@ -198,52 +198,71 @@ def test_verify_chain_without_expected_prev_hash_trusts_the_first_rows_own_prev_
     assert reason is None
 
 
-def test_verify_chain_detects_a_missing_middle_row_as_a_sequence_gap() -> None:
-    """A deleted row leaves its neighbours each internally correct — no hash check
-    alone would ever catch its absence — so this needs its own detection path."""
+def test_verify_chain_detects_a_deleted_middle_row_through_the_broken_link() -> None:
+    """A deletion is caught by the hash chain, not by counting seq values.
+
+    The surviving successor's ``prev_hash`` still points at the row that was
+    removed, so the link fails to close and the break is reported at the first
+    row that actually exists.
+    """
     events = append_batch([_entry(i) for i in range(5)], prev_hash=GENESIS_HASH)
     rows = _as_rows(events)
-    missing_seq = rows[2]["seq"]
-    del rows[2]  # simulate DELETE FROM audit_events WHERE seq = missing_seq
+    del rows[2]  # simulate DELETE FROM audit_events WHERE seq = 3
 
     valid, first_break, reason = verify_chain(rows, expected_prev_hash=GENESIS_HASH)
     assert valid is False
-    assert first_break == missing_seq == 3
-    assert reason == SEQUENCE_GAP
+    assert first_break == 4  # the surviving row whose prev_hash no longer matches
+    assert reason == HASH_MISMATCH
 
 
-def test_verify_chain_reports_the_first_missing_seq_of_a_multi_row_gap() -> None:
+def test_verify_chain_detects_a_multi_row_deletion() -> None:
     events = append_batch([_entry(i) for i in range(6)], prev_hash=GENESIS_HASH)
     rows = _as_rows(events)
-    del rows[2:4]  # seq 3 and 4 both gone; the gap is reported at the first one
+    del rows[2:4]  # seq 3 and 4 both gone
 
     valid, first_break, reason = verify_chain(rows, expected_prev_hash=GENESIS_HASH)
     assert valid is False
-    assert first_break == 3
-    assert reason == SEQUENCE_GAP
+    assert first_break == 5
+    assert reason == HASH_MISMATCH
 
 
-def test_verify_chain_prefers_sequence_gap_over_hash_mismatch_when_both_are_present() -> None:
-    """A gap is a more precise diagnosis than the prev_hash mismatch it would
-    otherwise present as, so it takes priority when a row after a gap is also
-    independently tampered."""
-    events = append_batch([_entry(i) for i in range(5)], prev_hash=GENESIS_HASH)
+def test_verify_chain_accepts_burned_sequence_numbers() -> None:
+    """The case that made the endpoint useless: a gap with the link intact.
+
+    PostgreSQL burns BIGSERIAL values on any rolled-back transaction, so a
+    healthy chain routinely has holes in its seq column. Production has two, of
+    47 and 74 numbers. Nothing was deleted, every prev_hash still closes, and
+    the chain is valid.
+    """
+    events = append_batch([_entry(i) for i in range(4)], prev_hash=GENESIS_HASH)
     rows = _as_rows(events)
-    del rows[2]
-    rows[2]["actor"] = "user:attacker"  # the row now at index 2 (originally seq 4)
+    for row, seq in zip(rows, [1, 49, 50, 124], strict=True):
+        row["seq"] = seq  # the chain is untouched; only the numbering jumps
+
+    valid, first_break, reason = verify_chain(rows, expected_prev_hash=GENESIS_HASH)
+    assert valid is True
+    assert first_break is None
+    assert reason is None
+
+    assert sequence_gaps(rows) == ((1, 49), (50, 124))
+
+
+def test_verify_chain_detects_deletion_of_the_very_first_row() -> None:
+    """No predecessor's link can break, so this needs the genesis anchor."""
+    events = append_batch([_entry(i) for i in range(4)], prev_hash=GENESIS_HASH)
+    rows = _as_rows(events)
+    del rows[0]
 
     valid, first_break, reason = verify_chain(rows, expected_prev_hash=GENESIS_HASH)
     assert valid is False
-    assert first_break == 3
-    assert reason == SEQUENCE_GAP
+    assert first_break == 2
+    assert reason == HASH_MISMATCH
+
+    # Without the anchor the truncated chain looks internally consistent —
+    # which is exactly why the router passes GENESIS_HASH for a full fetch.
+    assert verify_chain(rows) == (True, None, None)
 
 
-def test_verify_chain_gap_detection_does_not_depend_on_expected_prev_hash() -> None:
-    events = append_batch([_entry(i) for i in range(4)], prev_hash="c" * 64)
-    rows = _as_rows(events, start_seq=51)
-    del rows[1]  # drop seq 52
-
-    valid, first_break, reason = verify_chain(rows)
-    assert valid is False
-    assert first_break == 52
-    assert reason == SEQUENCE_GAP
+def test_sequence_gaps_is_empty_for_a_contiguous_range() -> None:
+    events = append_batch([_entry(i) for i in range(4)], prev_hash=GENESIS_HASH)
+    assert sequence_gaps(_as_rows(events)) == ()

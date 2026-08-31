@@ -44,6 +44,7 @@ __all__ = [
     "canonical_json",
     "compute_hash",
     "normalize_payload",
+    "sequence_gaps",
     "verify_chain",
 ]
 
@@ -202,11 +203,38 @@ def append_batch(
     return events
 
 
-#: `verify_chain`'s failure reasons. A tamperer with database access deletes a
-#: row rather than editing it, precisely because editing is what the hash catches
-#: — so a gap gets its own reason, distinct from a hash that fails to recompute.
+#: The only way a chain can be invalid: some row's hash does not recompute, or
+#: does not chain from its predecessor. A deletion presents as exactly this —
+#: the surviving successor's ``prev_hash`` still points at the row that was
+#: removed — which is why contiguity is not a second failure mode.
 HASH_MISMATCH = "hash_mismatch"
+
+#: Advisory label, **not** a verdict. ``seq`` comes from a ``BIGSERIAL``, and
+#: PostgreSQL burns values on any rolled-back transaction, so a gap is the
+#: normal state of a healthy chain rather than evidence of anything. Treating it
+#: as invalidity made ``/audit/verify-chain`` answer ``valid: false`` for the
+#: whole life of the deployment: the production chain has two gaps, of 47 and 74
+#: numbers, and the hash link is intact across both.
 SEQUENCE_GAP = "sequence_gap"
+
+
+def sequence_gaps(events: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, int], ...]:
+    """Non-consecutive ``seq`` pairs in ``events``, as ``(after_seq, next_seq)``.
+
+    Advisory only. A gap means one of two things and this function cannot tell
+    them apart: a row was deleted, or PostgreSQL burned the number on a
+    rolled-back transaction. :func:`verify_chain` *can* tell them apart — a
+    deletion breaks the hash link and a burned number does not — so the verdict
+    belongs there and this is context to report alongside it.
+    """
+    gaps: list[tuple[int, int]] = []
+    prev_seq: int | None = None
+    for row in events:
+        seq = row["seq"]
+        if prev_seq is not None and seq != prev_seq + 1:
+            gaps.append((prev_seq, seq))
+        prev_seq = seq
+    return tuple(gaps)
 
 
 def verify_chain(
@@ -224,42 +252,41 @@ def verify_chain(
 
     Returns ``(True, None, None)`` when every row's ``this_hash`` recomputes
     from its own fields and chains from its predecessor's ``this_hash``.
-    Otherwise returns ``(False, seq, reason)`` naming the *first* point that
-    fails and why:
+    Otherwise ``(False, seq, HASH_MISMATCH)`` naming the first row that fails:
+    either its stored ``prev_hash`` does not equal the predecessor's
+    ``this_hash``, or its own ``this_hash`` does not recompute from its fields.
+    Both are the same underlying event — a field was altered, or a row that
+    used to sit between them is gone — and are not worth distinguishing.
 
-    * :data:`SEQUENCE_GAP` — two consecutive rows in ``events`` do not have
-      consecutive ``seq`` values. ``seq`` reported is the first missing value
-      (a gap after seq 46 with the next row at 48 reports ``47``), which is
-      what a deleted row looks like: the surviving rows are each internally
-      correct, so no hash check alone would ever catch its absence. This is
-      checked *before* the hash-link check below, since a gap is a more
-      precise diagnosis than the "prev_hash doesn't match" symptom it would
-      otherwise present as.
+    **Contiguity is deliberately not checked.** ``seq`` is a ``BIGSERIAL`` and
+    PostgreSQL burns values on any rolled-back transaction, so gaps occur in a
+    perfectly healthy chain: the production ledger has two, of 47 and 74
+    numbers, and the hash link is intact across both. Reporting that as
+    ``valid: false`` is what made this endpoint answer "invalid" from the day it
+    shipped, with ``checked: 0``, so the hashes it exists to verify were never
+    verified at all.
 
-      A gap is evidence of a possible deletion, not proof of one: Postgres's
-      ``BIGSERIAL`` also skips values from an ordinary rolled-back
-      transaction that never got as far as ``audit_events``. Treat
-      :data:`SEQUENCE_GAP` as something a human confirms, not an automatic
-      verdict of tampering.
+    Nothing is lost by dropping it, because the hash chain already detects the
+    case contiguity was there to catch, and detects it *better*. Delete a row
+    and its successor's ``prev_hash`` still points at the deleted row, so the
+    link breaks and :data:`HASH_MISMATCH` fires. Burn a sequence number and no
+    link is disturbed. Contiguity could not tell those apart; the hash can.
+    :func:`sequence_gaps` reports gaps separately, as context for a human.
 
-    * :data:`HASH_MISMATCH` — the row's ``seq`` is contiguous with its
-      predecessor, but either its stored ``prev_hash`` does not equal the
-      predecessor's ``this_hash``, or its own ``this_hash`` does not
-      recompute from its fields. Both are the same underlying event (a field
-      was altered in place) and are not worth distinguishing further.
+    One case neither test catches: truncation. Delete the *most recent* rows
+    and there is no successor whose link can break. Detecting that needs an
+    anchor outside the table — a periodically published head hash — which this
+    build does not have.
 
     ``expected_prev_hash`` verifies a sub-range against its true predecessor
-    (typically the previous page's last ``this_hash``, or :data:`GENESIS_HASH`
-    for the first page) instead of trusting the first row's own ``prev_hash``
-    unconditionally. It plays no part in gap detection, which only compares
-    ``seq`` values within ``events`` itself.
+    (the previous page's last ``this_hash``, or :data:`GENESIS_HASH` for a whole
+    chain) instead of trusting the first row's own ``prev_hash``
+    unconditionally. Passing :data:`GENESIS_HASH` for a full fetch is what
+    catches deletion of the very first row.
     """
     prev_hash = expected_prev_hash
-    prev_seq: int | None = None
     for row in events:
         seq = row["seq"]
-        if prev_seq is not None and seq != prev_seq + 1:
-            return False, prev_seq + 1, SEQUENCE_GAP
         if prev_hash is not None and row["prev_hash"] != prev_hash:
             return False, seq, HASH_MISMATCH
         recomputed = compute_hash(
@@ -272,5 +299,4 @@ def verify_chain(
         if recomputed != row["this_hash"]:
             return False, seq, HASH_MISMATCH
         prev_hash = row["this_hash"]
-        prev_seq = seq
     return True, None, None

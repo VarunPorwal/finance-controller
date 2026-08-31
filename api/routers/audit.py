@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import AuthenticatedUser, current_user, db_session
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
 from db.models import AuditEvent
-from fc.audit.ledger import verify_chain
+from fc.audit.ledger import GENESIS_HASH, sequence_gaps, verify_chain
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -43,6 +43,14 @@ class AuditEventOut(BaseModel):
     created_at: datetime
 
 
+class SequenceGapOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    after_seq: int
+    next_seq: int
+    missing: int
+
+
 class VerifyChainOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +58,14 @@ class VerifyChainOut(BaseModel):
     checked: int
     first_break_seq: int | None = None
     reason: str | None = None
+    #: Non-consecutive seq values in the verified range. Advisory: seq is a
+    #: BIGSERIAL and PostgreSQL burns numbers on rolled-back transactions, so
+    #: gaps are normal. A gap caused by an actual deletion breaks the hash link
+    #: and shows up in ``valid``/``reason`` instead.
+    gaps: list[SequenceGapOut] = []
+    #: Present when the range verified clean but contains gaps worth a human
+    #: glance. Never a failure.
+    advisory: str | None = None
 
 
 def _event_out(row: AuditEvent) -> AuditEventOut:
@@ -118,16 +134,12 @@ async def get_verify_chain(
     if not rows:
         return VerifyChainOut(valid=True, checked=0)
 
-    # verify_chain only checks contiguity *within* what it is handed — a range
-    # missing its own first row (seq 1 requested, the chain actually starts at
-    # 4) or its own last row (to_seq requested past what exists) would pass
-    # silently otherwise. That is the range-start gap flagged as a known hole
-    # in Phase 1: closed here, at the one caller that can see the boundary.
-    if rows[0].seq != from_seq:
-        return VerifyChainOut(
-            valid=False, checked=0, first_break_seq=from_seq, reason="sequence_gap"
-        )
-
+    # No range-start check. It used to return invalid whenever rows[0].seq !=
+    # from_seq, and since from_seq defaults to 1 while this tenant's chain
+    # starts at 702, the default call short-circuited with checked=0 — every
+    # verification this endpoint ever performed verified nothing. A chain that
+    # starts later than requested is not evidence of anything; a chain whose
+    # *first* row is missing is, and passing GENESIS_HASH below catches that.
     events = [
         {
             "seq": r.seq,
@@ -140,10 +152,31 @@ async def get_verify_chain(
         }
         for r in rows
     ]
-    expected_prev_hash = rows[0].prev_hash if from_seq == 1 else None
+    # A fetch from the beginning is the whole chain, so its first row must
+    # chain from the genesis hash. Anything else means row one is gone. A
+    # sub-range has no such anchor and is verified internally.
+    expected_prev_hash = GENESIS_HASH if from_seq <= 1 else None
     valid, first_break_seq, reason = verify_chain(events, expected_prev_hash=expected_prev_hash)
+    gaps = [
+        SequenceGapOut(after_seq=after, next_seq=nxt, missing=nxt - after - 1)
+        for after, nxt in sequence_gaps(events)
+    ]
+    advisory = None
+    if valid and gaps:
+        total = sum(g.missing for g in gaps)
+        advisory = (
+            f"{len(gaps)} sequence gap(s) totalling {total} unused seq value(s). "
+            "The hash chain is intact across them, so these are BIGSERIAL numbers "
+            "burned by rolled-back transactions, not deleted rows — a deletion "
+            "would have broken the link."
+        )
     return VerifyChainOut(
-        valid=valid, checked=len(events), first_break_seq=first_break_seq, reason=reason
+        valid=valid,
+        checked=len(events),
+        first_break_seq=first_break_seq,
+        reason=reason,
+        gaps=gaps,
+        advisory=advisory,
     )
 
 

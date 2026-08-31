@@ -25,7 +25,13 @@ from typing import Any, cast
 
 import pytest
 
-from fc.audit.ledger import GENESIS_HASH, HASH_MISMATCH, SEQUENCE_GAP, append_batch, verify_chain
+from fc.audit.ledger import (
+    GENESIS_HASH,
+    HASH_MISMATCH,
+    append_batch,
+    sequence_gaps,
+    verify_chain,
+)
 from fc.config import asyncpg_url, load_config
 from tests.integration.conftest import ADMIN, purge, run
 
@@ -230,11 +236,18 @@ def test_verify_chain_reports_the_exact_seq_regardless_of_which_row_is_tampered(
     _run_async(body)
 
 
-def test_verify_chain_reports_a_deleted_middle_row_as_a_sequence_gap() -> None:
-    """The gap this whole mechanism exists for: a tamperer with database access
-    deletes a row rather than editing it, precisely because editing is what the
-    hash chain catches. This DELETEs seq 47-equivalent directly and confirms
-    verify_chain reports it as a gap at that exact seq, not a hash_mismatch."""
+def test_verify_chain_detects_a_deleted_middle_row_against_the_real_table() -> None:
+    """A tamperer with database access deletes a row rather than editing one,
+    precisely because editing is what the hash catches. Deleting does not
+    escape it: the surviving successor's prev_hash still points at the row that
+    is gone, so the link fails to close and the break is reported at the first
+    row that still exists.
+
+    Contiguity used to be the test here. It could not distinguish this from a
+    BIGSERIAL number burned by a rolled-back transaction, and reported both as
+    invalid — which is why the endpoint answered valid:false in production for
+    a chain nobody had touched.
+    """
 
     async def body(conn: Any) -> None:
         events = append_batch(_sample_entries(6), prev_hash=GENESIS_HASH)
@@ -246,8 +259,43 @@ def test_verify_chain_reports_a_deleted_middle_row_as_a_sequence_gap() -> None:
         chain = await _fetch_chain(conn)
         valid, first_break, reason = verify_chain(chain, expected_prev_hash=GENESIS_HASH)
         assert valid is False
-        assert first_break == deleted_seq
-        assert reason == SEQUENCE_GAP
+        assert first_break == seqs[3]
+        assert reason == HASH_MISMATCH
+
+        assert sequence_gaps(chain) == ((seqs[1], seqs[3]),)
+
+    _run_async(body)
+
+
+def test_verify_chain_accepts_a_gap_left_by_a_rolled_back_transaction() -> None:
+    """The false positive that broke the endpoint, reproduced for real.
+
+    An INSERT that rolls back still consumes its BIGSERIAL value, leaving a hole
+    in seq with nothing missing from the chain. That must verify clean.
+    """
+
+    async def body(conn: Any) -> None:
+        events = append_batch(_sample_entries(3), prev_hash=GENESIS_HASH)
+        first = await _insert_events(conn, events[:2])
+
+        # Burn sequence values the way a rolled-back INSERT does. Advancing the
+        # sequence directly is the same mechanism with none of the ceremony:
+        # BIGSERIAL takes its value from nextval, and nextval is not
+        # transactional, which is exactly why a rollback leaves a hole.
+        await conn.execute(
+            "SELECT nextval(pg_get_serial_sequence('audit_events','seq')) "
+            "FROM generate_series(1, 3)"
+        )
+
+        last = await _insert_events(conn, events[2:])
+        assert last[0] > first[-1] + 1, "expected the rollback to burn a seq value"
+
+        chain = await _fetch_chain(conn)
+        valid, first_break, reason = verify_chain(chain, expected_prev_hash=GENESIS_HASH)
+        assert valid is True
+        assert first_break is None
+        assert reason is None
+        assert sequence_gaps(chain), "the gap should still be reported as advisory"
 
     _run_async(body)
 

@@ -2626,6 +2626,15 @@ export interface components {
             /** Date To */
             date_to?: string | null;
         };
+        /** SequenceGapOut */
+        SequenceGapOut: {
+            /** After Seq */
+            after_seq: number;
+            /** Next Seq */
+            next_seq: number;
+            /** Missing */
+            missing: number;
+        };
         /** SnoozeCommand */
         SnoozeCommand: {
             /**
@@ -2848,6 +2857,13 @@ export interface components {
             first_break_seq?: number | null;
             /** Reason */
             reason?: string | null;
+            /**
+             * Gaps
+             * @default []
+             */
+            gaps: components["schemas"]["SequenceGapOut"][];
+            /** Advisory */
+            advisory?: string | null;
         };
         /** WarningOut */
         WarningOut: {
