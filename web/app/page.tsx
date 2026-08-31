@@ -11,17 +11,25 @@ import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
+import { TrendBars } from "@/components/ui/trend-bars";
 import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
 type EventCount = components["schemas"]["EventCountOut"];
 type EvalResult = components["schemas"]["EvalResultOut"];
+interface HistoryPoint {
+  label: string;
+  eventCount: number;
+  autoMatched: number;
+}
 interface HomeBundle {
   prevSummary: RunSummary | null;
   counts: EventCount | null;
   evalResult: EvalResult | null;
-  runHistoryDepth: number;
+  history: HistoryPoint[];
 }
+
+const HISTORY_WINDOW = 10;
 
 const SOURCE_COLOR: Record<string, string> = {
   razorpay: "var(--primary)",
@@ -38,7 +46,7 @@ export default function ReconcileHome() {
   const [prevSummary, setPrevSummary] = useState<RunSummary | null>(cached?.prevSummary ?? null);
   const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
   const [evalResult, setEvalResult] = useState<EvalResult | null>(cached?.evalResult ?? null);
-  const [runHistoryDepth, setRunHistoryDepth] = useState<number | null>(cached?.runHistoryDepth ?? null);
+  const [history, setHistory] = useState<HistoryPoint[]>(cached?.history ?? []);
 
   useEffect(() => {
     if (!runId) return;
@@ -49,16 +57,18 @@ export default function ReconcileHome() {
       setPrevSummary(seeded.prevSummary);
       setCounts(seeded.counts);
       setEvalResult(seeded.evalResult);
-      setRunHistoryDepth(seeded.runHistoryDepth);
+      setHistory(seeded.history);
     }
     async function load() {
       const [runsRes, countRes, evalRes] = await Promise.all([
-        apiClient.GET("/api/v1/runs", { params: { query: { status: "complete", limit: 2 } } }),
+        apiClient.GET("/api/v1/runs", {
+          params: { query: { status: "complete", kind: "original", limit: HISTORY_WINDOW } },
+        }),
         apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
         apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId! } } }),
       ]);
       if (cancelled) return;
-      const runs = runsRes.data?.items ?? [];
+      const runs = runsRes.data?.items ?? []; // newest first
       let prev: RunSummary | null = null;
       if (runs.length > 1) {
         const olderRunId = runs.find((r) => r.run_id !== runId)?.run_id;
@@ -70,17 +80,34 @@ export default function ReconcileHome() {
           prev = data ?? null;
         }
       }
+
+      const chronological = [...runs].reverse(); // oldest first, for a left-to-right trend
+      const summaries = await Promise.all(
+        chronological.map((r) =>
+          apiClient.GET("/api/v1/runs/{run_id}/summary", { params: { path: { run_id: r.run_id } } }),
+        ),
+      );
+      if (cancelled) return;
+      const historyPoints: HistoryPoint[] = chronological.map((r, i) => {
+        const s = summaries[i].data;
+        return {
+          label: new Date(r.started_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+          eventCount: s?.event_count ?? 0,
+          autoMatched: s ? s.event_count - s.exception_count : 0,
+        };
+      });
+
       const bundle: HomeBundle = {
         prevSummary: prev,
         counts: countRes.data ?? null,
         evalResult: evalRes.data ?? null,
-        runHistoryDepth: runs.length,
+        history: historyPoints,
       };
       cacheSet(key, bundle);
       setPrevSummary(bundle.prevSummary);
       setCounts(bundle.counts);
       setEvalResult(bundle.evalResult);
-      setRunHistoryDepth(bundle.runHistoryDepth);
+      setHistory(bundle.history);
     }
     void load();
     return () => {
@@ -109,7 +136,6 @@ export default function ReconcileHome() {
     { label: "Queue", value: summary.escalated_count + summary.monitor_count, icon: <Clock width={14} height={14} />, iconBg: "var(--neutral-bg)", iconColor: "var(--text-body)", d: delta("escalated_count", summary.escalated_count) },
   ];
 
-  const hasHistory = (runHistoryDepth ?? 0) >= 7;
   const sources = counts
     ? Object.entries(counts.by_source).map(([label, count]) => ({ label, count, color: SOURCE_COLOR[label] ?? "var(--text-muted)" }))
     : [];
@@ -154,14 +180,18 @@ export default function ReconcileHome() {
       <div className="mb-5 grid grid-cols-[1.65fr_1fr] gap-5">
         <div className="flex flex-col gap-5">
           <div className="fc-card">
-            <div className="px-[22px] pt-4 text-sm font-semibold">Value reconciled</div>
+            <div className="flex items-center justify-between px-[22px] pt-4">
+              <div className="text-sm font-semibold">Records reconciled</div>
+              <span className="text-[11.5px] text-text-muted">
+                last {history.length} run{history.length === 1 ? "" : "s"}
+              </span>
+            </div>
             <div className="px-[22px] pt-3.5 pb-5">
-              {hasHistory ? (
-                <div className="text-sm text-text-muted">Trend chart — {runHistoryDepth} days of history.</div>
+              {history.length > 0 ? (
+                <TrendBars points={history.map((h) => ({ label: h.label, value: h.eventCount }))} color="var(--primary)" />
               ) : (
                 <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-text-muted">
-                  Needs 7 days of runs to chart a trend — fills in as you use it.
-                  <span className="fc-numeric ml-1">({runHistoryDepth ?? 0}/7)</span>
+                  No completed runs yet — this fills in after your first run.
                 </div>
               )}
             </div>
@@ -199,11 +229,13 @@ export default function ReconcileHome() {
             <div className="px-5 pt-4 text-sm font-semibold">Auto-Resolutions</div>
             <div className="px-5 pt-3.5 pb-5">
               <div className="fc-numeric text-[22px] font-semibold">{autoMatched}</div>
-              {hasHistory ? (
-                <div className="mt-4 text-sm text-text-muted">7-day chart — {runHistoryDepth} days of history.</div>
+              {history.length > 0 ? (
+                <div className="mt-3">
+                  <TrendBars points={history.map((h) => ({ label: h.label, value: h.autoMatched }))} color="var(--success)" />
+                </div>
               ) : (
                 <div className="mt-4 rounded-[10px] border border-dashed border-border p-4 text-center text-xs text-text-muted">
-                  Needs 7 days of runs to chart daily volume.
+                  No completed runs yet to chart.
                 </div>
               )}
             </div>
