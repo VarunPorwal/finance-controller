@@ -99,6 +99,10 @@ target that enforces them.
 - Frontend calls the generated client in `web/lib/api.ts`. Never hand-write
   fetch. Regenerate with `make client` after any Pydantic change.
 - Never use localStorage or sessionStorage in the frontend.
+- `design/` holds the design handoff. It defines visual treatment only. Data,
+  endpoints and behaviour come from the PRD and the existing implementation —
+  where a design shows a number, use the real one from the API, never the mock
+  value.
 
 
 ## Things that are easy to get wrong here
