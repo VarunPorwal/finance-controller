@@ -1370,6 +1370,12 @@ async def _answer_via_sql(
     try:
         safe_sql = guard(plan.sql, tenant_id=user.tenant_id)
     except SqlRejected as exc:
+        # text_to_sql is in HAS_DOWNSTREAM_CHECK, so nothing was cached by
+        # call(). Rejecting here keeps it that way: the next ask of the same
+        # question gets a fresh attempt instead of this one served back.
+        client.reject(result, tenant_id=user.tenant_id, run_id=run_id)
+        await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+        await session.commit()
         # The reason is logged, never rendered. It used to be interpolated
         # straight into refusal_reason, so a parse failure put sqlglot's token
         # dump — ANSI underline escapes and all — on screen as the answer. §13.7
@@ -1392,6 +1398,13 @@ async def _answer_via_sql(
             model_used=result.model,
             cached=result.cached,
         )
+
+    # The guard agreed, so this plan is safe to remember. Until now text_to_sql
+    # was cached inline by call(), which meant an unparseable plan was cached
+    # too and re-served on every later ask of the same question.
+    client.confirm(result, tenant_id=user.tenant_id, run_id=run_id)
+    await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+    await session.commit()
 
     async with readonly_session(user.tenant_id, user.role) as ro:
         cursor = await ro.execute(_text(safe_sql))

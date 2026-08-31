@@ -84,7 +84,16 @@ Outcome = Literal["ok", "rate_limited", "timeout", "schema_fail", "down", "termi
 #: to a fact it was actually handed. A narration that fails is never cached,
 #: for exactly the reason ``pdf_extract`` is here: a plausible-looking answer
 #: that slipped one invented number past validation must not be re-served.
-HAS_DOWNSTREAM_CHECK: frozenset[str] = frozenset({"pdf_extract", "sql_narrate"})
+#: ``text_to_sql``/``text_to_sql_light``'s downstream check is
+#: ``fc.llm.sql_guard.guard``. Schema validation cannot stand in for it: the
+#: schema asks for a *string* and a model that appends a stray ``}”,`` or a
+#: lone ``κ`` past the final paren still satisfies it. Both were observed in
+#: production, and because these purposes were cached inline the unparseable
+#: plan was re-served on every subsequent ask of the same question — the
+#: question stopped being intermittently broken and became permanently broken.
+HAS_DOWNSTREAM_CHECK: frozenset[str] = frozenset(
+    {"pdf_extract", "sql_narrate", "text_to_sql", "text_to_sql_light"}
+)
 
 
 @dataclass(frozen=True)
