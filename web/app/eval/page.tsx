@@ -9,6 +9,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 
 type EvalResult = components["schemas"]["EvalResultOut"];
+type ConfusionOut = components["schemas"]["ConfusionOut"];
 
 const STAGE_LABEL: Record<string, string> = {
   exact_ref: "Exact reference match",
@@ -21,13 +22,19 @@ const STAGE_LABEL: Record<string, string> = {
 export default function EvaluationPage() {
   const { summary } = useRun();
   const [evalResult, setEvalResult] = useState<EvalResult | null | undefined>(undefined);
+  const [confusion, setConfusion] = useState<ConfusionOut | null>(null);
   const runId = summary?.run.run_id;
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
-    apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }).then((res) => {
-      if (!cancelled) setEvalResult(res.data ?? null);
+    Promise.all([
+      apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }),
+      apiClient.GET("/api/v1/eval/{run_id}/confusion", { params: { path: { run_id: runId } } }),
+    ]).then(([evalRes, confusionRes]) => {
+      if (cancelled) return;
+      setEvalResult(evalRes.data ?? null);
+      setConfusion(confusionRes.data ?? null);
     });
     return () => {
       cancelled = true;
@@ -85,7 +92,7 @@ export default function EvaluationPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(evalResult.by_stage).map(([stage, stats]) => {
+                  {Object.entries(confusion?.by_stage ?? {}).map(([stage, stats]) => {
                     const s = stats as { precision: number; recall: number };
                     return (
                       <tr key={stage} className="border-b border-[color:var(--neutral-bg)] text-[13px] last:border-0">

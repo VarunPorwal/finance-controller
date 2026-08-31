@@ -165,7 +165,7 @@ export default function RuleBookPage() {
               </div>
               <div className="px-[22px] pt-3.5 pb-5">
                 <div className="mb-3.5 flex flex-col gap-1.5">
-                  {rule.deductions.slice(0, 3).map((d, i) => (
+                  {(rule.deductions ?? []).slice(0, 3).map((d, i) => (
                     <div key={i} className="flex justify-between text-[13px]">
                       <span className="text-text-body">{humanizeSnakeCase(d.type)}</span>
                       <span className="fc-numeric text-base font-semibold">

@@ -14,7 +14,7 @@ export default function AskPage() {
         </div>
         <div className="mt-[3px] text-[13px] text-text-muted">
           Everything on this page is narration over deterministic results — the model never
-          decides what's reconciled.
+          decides what&apos;s reconciled.
         </div>
       </div>
       <div className="h-[calc(100vh-220px)]">

@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { RefreshCw, Download, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
-import { formatPaiseWhole, formatPercent } from "@/lib/format";
+import { formatPercent } from "@/lib/format";
 import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";

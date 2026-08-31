@@ -620,7 +620,9 @@ async def create_run(
     eval_started = time.monotonic()
     eval_report = evaluate(corpus, cfg, rules=ruleset.rules)
     gates = check_gates(eval_report, cfg)
-    _persist_eval_result(session, run_id=run_id, tenant_id=user.tenant_id, report=eval_report, gates=gates)
+    _persist_eval_result(
+        session, run_id=run_id, tenant_id=user.tenant_id, report=eval_report, gates=gates
+    )
     eval_seconds = time.monotonic() - eval_started
     if eval_seconds > _EVAL_LATENCY_WARN_SECONDS:
         logger.warning(

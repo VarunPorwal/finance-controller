@@ -107,7 +107,12 @@ export function ExceptionsTable({
               : humanizeSnakeCase(exc.category),
             counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
             source: firstEvent?.source ?? "razorpay",
-            reference: firstEvent?.utr ?? firstEvent?.settlement_id ?? firstEvent?.order_id ?? "—",
+            reference:
+              firstEvent?.utr ??
+              firstEvent?.settlement_id ??
+              firstEvent?.order_id ??
+              firstEvent?.voucher_number ??
+              "—",
           };
         }),
       );

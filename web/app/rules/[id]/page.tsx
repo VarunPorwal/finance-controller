@@ -132,7 +132,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
             </div>
             <div className="px-[22px] pt-3.5 pb-5">
               <div className="flex flex-col gap-2.5">
-                {latest.deductions.map((d, i) => (
+                {(latest.deductions ?? []).map((d, i) => (
                   <div
                     key={i}
                     className="flex items-center justify-between rounded-[10px] border border-border px-3.5 py-3"
@@ -230,7 +230,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
                     </div>
                     <div className="mt-0.5 text-[11.5px] text-text-muted">{v.effective_from}</div>
                     <div className="mt-1 text-[12.5px] text-text-body">
-                      {v.deductions.map((d) => `${d.rate ?? 0}% ${humanizeSnakeCase(d.type)}`).join(" · ")}
+                      {(v.deductions ?? []).map((d) => `${d.rate ?? 0}% ${humanizeSnakeCase(d.type)}`).join(" · ")}
                     </div>
                   </div>
                 </div>

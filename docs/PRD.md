@@ -3327,39 +3327,55 @@ The dashboard's single job is to prove the human's workload shrank. Every choice
 
 ## 13.2 Colour tokens
 
+**Superseded 31 Aug 2026 — see REVISION LOG 3.7.** This section originally
+specified a dark surface; the design handoff at `design/README.md` (received
+after §13 was written) is now the literal source of truth and is a light
+surface. Values below are `design/README.md`'s, verbatim.
+
 ```css
---ink-900:   #0A1020;   /* page ground */
---ink-800:   #121A2E;   /* raised surface, cards */
---ink-700:   #1B2540;   /* row hover */
---rule:      #22304F;   /* ledger rules, hairline dividers */
+--bg:      #F5F6F8;   /* page ground */
+--card:    #FFFFFF;   /* raised surface, cards */
+--border:  #EEF0F3;   /* single border colour, everywhere */
 
---paper-100: #E8ECF4;   /* primary text */
---paper-300: #9AA7C0;   /* secondary, labels */
---paper-500: #5C6B8A;   /* tertiary, disabled */
+--primary:      #2F6FED;   /* deterministic engine output only: focus, links, primary actions */
+--primary-hover: #1D4ED8;
+--primary-tint:  #EFF6FF;   /* active nav / selected state background */
 
---rzp-blue:  #3395FF;   /* structural: focus, links, active tab */
---rzp-deep:  #0C2451;   /* selected row ground */
+--success:  #0F9D58;  --success-bg: #E7F7EE;   /* auto-resolved, verified */
+--amber:    #F59E0B;  --amber-text: #B45309;  --amber-bg: #FEF2E8;   /* monitor */
+--error:    #DC2626;  --error-bg:   #FEECEC;   /* escalate, needs review */
 
---sig-green: #2FB37A;   /* auto-resolved */
---sig-amber: #E0A02E;   /* monitor */
---sig-red:   #E5484D;   /* escalate */
+/* Reserved exclusively for model/LLM output — Ask Controller, suggested
+   rule cards. No equivalent existed in the original dark spec. */
+--model-bg:     #FAF8FF;
+--model-border: #E6E0FA;
+--model-text:   #5B21B6;
+--model-pill-bg: #EDE4FF;
+
+--text-heading: #0F172A;
+--text-body:    #5B6472;
+--text-muted:   #9AA1AC;
+--text-faint:   #B4BAC4;
 ```
 
-**Signal colours appear only on tier indicators and their attached amounts.** Nowhere else. When everything is ink and paper, one red badge carries real weight. This is where we spend our boldness.
+**Signal colours (success/amber/error) appear only on tier indicators and their attached amounts.** Nowhere else — that discipline carries over from the original dark spec unchanged.
+
+**The violet rule is the one addition with no equivalent in the original spec, and the one that matters most.** It is the single deliberate exception to "signal colour only on tiers": violet marks a surface as *model output*, full stop — Ask Controller's entire panel, a suggested rule card, nothing else. This makes the architecture's core guarantee visible without reading a line of code: if it's violet, the LLM produced it and a human or a deterministic check still has to act on it: the model never decides what's reconciled.
 
 ## 13.3 Typography
 
+**Superseded 31 Aug 2026 — see REVISION LOG 3.7.**
+
 | Role | Face | Use |
 |---|---|---|
-| Display | Satoshi (Fontshare, free) | Headings, metric labels, bridge |
-| Body | Inter | Prose, evidence narrative |
-| Data | IBM Plex Mono | Every number, every reference, every UTR |
+| UI | Inter, weights 400/500/600 only | Every heading, label and body string — no separate display face |
+| Data | JetBrains Mono, weights 400/500/600 | Every number, every reference, every UTR |
 
-`font-variant-numeric: tabular-nums` on every numeric column. Rupee amounts aligning down the column is the cheapest signal that someone who has built finance software worked on this, and most teams miss it entirely.
+`font-variant-numeric: tabular-nums` on every numeric column, unchanged from the original spec — rupee amounts aligning down the column is the cheapest signal that someone who has built finance software worked on this.
 
 References render in mono because they are identifiers, not prose, and monospace makes them comparable at a glance.
 
-Scale: 12 / 13 / 15 / 18 / 24 / 34. Tight. This is a dense tool.
+**Numeral scale is exactly three sizes: 28px (hero values), 22px (secondary values), 16px (row/table values).** Page title 24px/600/-0.025em, card title 14px/600, body 13px. **Maximum font-weight anywhere is 600** — the original spec's Satoshi at 700/900 is gone along with Satoshi itself; Inter 600 is the heaviest weight the interface ever uses.
 
 ## 13.4 Signature element: the Reconciliation Bridge
 
@@ -3382,7 +3398,27 @@ This is the artifact a finance person draws by hand on paper when explaining a s
 
 ## 13.5 Layout
 
-Three tabs: **Reconcile · Rulebook · Ask**
+**Superseded 31 Aug 2026 — see REVISION LOG 3.7.** The original three-tab
+layout (below, kept for record) is replaced by eight real routes, one per
+screen, with a persistent sidebar rather than a tab strip: **Reconcile
+(`/`) · Exceptions · Data Sources · Records · Rule Book (list + `/rules/[id]`
+detail) · Controller Activity · Evaluation**, plus **Ask Controller**
+(`/ask`, reached from a teaser card on Reconcile rather than the sidebar,
+matching the design handoff). Per-screen layout, spacing and copy are
+`design/README.md`'s to read in full rather than re-drawn here as ASCII —
+that file is now the maintained source for what each screen contains; this
+section stays only as the record of the thesis that motivated it.
+
+Two decisions carried over unchanged from the original three-tab build,
+because they were about information hierarchy, not chrome: auto-resolved
+items still collapse below the fold on the Exceptions screen, out of the
+queue entirely — a judge sees immediately that the human looks at a handful
+of things, not hundreds. And the instruction box still sits at the bottom of
+the evidence panel, in context — the human reads the evidence, then says
+what they know.
+
+<details>
+<summary>Original three-tab ASCII layout (superseded, kept for record)</summary>
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -3391,7 +3427,7 @@ Three tabs: **Reconcile · Rulebook · Ask**
 ├────────────────────────────────────────────────────────────────┤
 │ ╔══ RECONCILIATION BRIDGE ════════════════════════════════════╗│
 │ ║ gross ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  ₹5,04,200      ║│
-│ ║ net   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░  ₹4,19,549      ║│
+│ ║ net   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░  ₹4,19,549      ║│
 │ ║ bank  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░  ₹4,12,000      ║│
 │ ║                                    gap →      ₹7,549  🔴    ║│
 │ ╚═════════════════════════════════════════════════════════════╝│
@@ -3425,9 +3461,7 @@ Three tabs: **Reconcile · Rulebook · Ask**
 └──────────────────────────────┴─────────────────────────────────┘
 ```
 
-**Most important layout decision:** auto-resolved items collapse below the fold, out of the queue entirely. They do not compete for attention. A judge sees immediately that the human looks at six things, not five hundred.
-
-**The instruction box sits at the bottom of the evidence panel**, in context. The human reads the evidence, then says what they know. That ordering is the product.
+</details>
 
 ## 13.6 Rulebook tab
 
@@ -3476,7 +3510,7 @@ Animate transform and opacity only. Collapsible height is the exception, and sha
 
 ## 13.11 Quality floor
 
-Responsive to tablet. Visible keyboard focus in `--rzp-blue`. `prefers-reduced-motion` respected. Dark surface only. All interactive elements reachable by keyboard, with a documented tab order through the queue and into the evidence pack.
+**"Dark surface only" superseded 31 Aug 2026 — see REVISION LOG 3.7; now light surface only**, per `design/README.md`. The rest of this floor is unchanged: responsive to tablet, visible keyboard focus (now in `--primary`, `#2F6FED`), `prefers-reduced-motion` respected, all interactive elements reachable by keyboard, with a documented tab order through the queue and into the evidence pack.
 
 ---
 
@@ -3978,6 +4012,7 @@ Transitions permitted only via API endpoints, every one audit-logged with actor 
 
 | Version | Date | Change |
 |---|---|---|
+| 3.7 | 31 Aug 2026 | **§13's dark direction superseded by the design handoff.** `design/README.md` and `design/CONTROL Reconcile.dc.html` (a high-fidelity 8-screen reference: Reconcile, Exceptions, Data Sources, Records, Rule Book list/detail, Controller Activity, Evaluation) arrived after §13 was written and specify a light surface — §13.2's colour tokens, §13.3's typography and §13.11's "dark surface only" line are rewritten to match rather than the other way round; the design decision was made with the design in hand, §13 wasn't. §13.5's three-tab ASCII layout is retired in favour of eight real Next.js routes (the app was previously one route with in-memory tab state) and moved to an appendix for the record. The one addition with no equivalent in the original spec: a violet surface (`#FAF8FF`/`#E6E0FA`/`#5B21B6`) reserved exclusively for model/LLM output — Ask Controller's whole panel, suggested rule cards — making the architecture's core guarantee (the LLM never decides, only narrates) visible without reading code. Ask Controller itself was rebuilt as a real chat surface (message thread, typing indicator, prose answers, SQL/diff collapsed behind "how I got this", conversational refusals) rather than a query box; the underlying `/agent/ask` contract, its conversational memory and its diff-tool routing are unchanged — this was presentation only. On the backend: `fc.eval.report.evaluate()` gained `stage_recall` alongside the existing `stage_precision` (same per-stage `hits` numerator, divided by the corpus's total true pairs) so the Evaluation screen can show precision *and* recall by matching stage. `eval_results` gained two nullable JSONB columns, `gates` and `failures` (migration `0003_eval_gates_and_failures`) — additive to a table that already existed, holding `check_gates()`'s PASS/FAIL verdicts and `EvalReport.failures`'s honest "what we got wrong" list, neither of which had anywhere to be persisted before. `POST /runs` now computes and persists an `eval_results` row inline for `mode="demo"` runs only — the only runs with ground truth to score against, since they're the only ones ingested from `fc.eval.corpus.load_corpus()`; a `mode="empty"` run (real uploaded data) correctly gets no eval row rather than being scored against the wrong corpus. Measured at ~0.7s total added latency on the seeded corpus, comfortably under the 15s budget past which the plan called for moving eval to a separate endpoint — not needed. Three small additive endpoints, none requiring a schema change: `GET /events/count` (grouped by source — `Page[T]` deliberately carries no total, and several screens needed one), `GET /llm/calls` (a listing endpoint over the existing `llm_calls` table, which previously had no router at all), and `POST /rules/{id}/backtest`'s response gained `precision_pct`/`coverage_pct` (computed from its existing bucket counts, not a new concept). The "Assigned to me" exceptions filter from the design was dropped rather than adding an assignee column — a single-user demo has no one to assign to, and CLAUDE.md's schema freeze (28 Aug) makes a new column for an unused feature the wrong call; logged as a Phase 2 item alongside multi-user auth. |
 | 3.6 | 30 Aug 2026 | **§11.5 replaced with real figures.** The original table (500 records, 41 exceptions -> 6 root causes) was illustrative, written before a corpus existed. Measured against the actual seeded run (tenant `t_lumea`, seed 7, the corpus already on disk): 1,571 records (500 scenarios fan out to more physical rows — a scenario is not a row), 1,410 auto-matched, 435 rule-resolved, 46 exceptions (38 escalate, 0 monitor, 8 auto). The queue line is now **38 needs-you exceptions -> 18 queue items (9 clusters, 9 standalone)**, not "46 -> 10 root causes" — the original frontend summary line mixed the 8 already-auto-resolved exceptions into a "root cause" count, which is exactly the kind of figure that falls apart under a "what does this count" question. Clustering key deliberately left untouched: three separate `missing_in_bank` clusters are three distinct root causes, and merging them would misreport the diagnosis to buy a smaller queue number. Cash at risk (₹18,783.72) and GST input claimable (₹7,982.04) are live off `GET /cash/bridge`, cross-checked against `fc.eval.report`'s identical figures (same corpus, same pipeline call). The "four things it got wrong" line is now "read `fc.eval.report`'s failures list fresh" rather than a hardcoded count, for the same reason — it currently reads 11, not 4, and would drift the moment the corpus regenerates. |
 | 3.5 | 29 Aug 2026 | **Tiers widened to the real quota, and quota keyed per model.** The free tier allows 20 requests per day *per Flash model*, which the original three-and-two tier layout could exhaust in a morning. Every usable id is now listed: light gains `gemini-3.1-flash-lite-preview` (1500 RPD combined), standard and deep gain `gemini-3-flash-preview` (80 RPD combined, against 20 without rotation). `gemini-3-flash` is excluded — not in the catalogue — and both `-latest` ids are excluded as **aliases**: `gemini-flash-lite-latest` reports `modelVersion=gemini-3.5-flash-lite`, so it shares that model's bucket and would have inflated the remaining-budget figure while adding no capacity. Health and quota are now keyed on `(provider, model)` rather than `(provider, model, thinking)`, because `standard` and `deep` are the same four models and the provider counts them against one bucket; the previous key tracked two counters over one limit and believed it had twice the budget. `/agent/health` gains a `budget` block — per-model RPD used/limit/usable/remaining, deduplicated by bucket, plus a combined total — so remaining capacity is one glance rather than an inference. Appendix H question 6 closed with the real figures. |
 | 3.4 | 29 Aug 2026 | **Model ids verified against the live APIs.** The ids in §7.2 and Appendix C were written from documentation and none had ever been called; a probe of the Groq fallback path found `llama-3.3-70b-versatile` returns 404 `model_not_found` — this account's Groq catalogue has no Llama chat model. The fallback tier is now `openai/gpt-oss-120b` and `openai/gpt-oss-20b`, both confirmed against a strict `json_schema` request. All five Gemini ids verified correct; `gemini-3.7-flash` is valid but currently 503 `UNAVAILABLE` under load, which the router already treats as transient. §7.2 gains a "Model ids, verified" subsection and a failure-table row: a 404 is a **configuration** error that trips the model for the session, not a schema failure that rotates without tripping — the original classification meant every later call paid full latency to rediscover a dead endpoint while the log blamed the schema. Appendix H question 6 partly closed: ids confirmed, RPM/RPD not exposed by either API and left as the published figures, which is safe because they feed a headroom margin rather than a hard limit. |
