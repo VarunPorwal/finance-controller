@@ -521,30 +521,17 @@ async def create_run(
 ) -> RunOut:
     started_at = datetime.now(UTC)
 
-    if body.mode == "demo":
-        # `fc.eval.corpus.load_corpus()` always returns the exact same
-        # content — same event ids, same `voucher_guid`s and other
-        # source-content fields, several of which carry a *global* unique
-        # index (`ix_te_guid`: real idempotency, the same physical voucher
-        # must not double-book). So the demo corpus can be inserted at most
-        # once, ever, per tenant — a second "Run demo corpus" click cannot
-        # create an independent second run of it, because there is no second
-        # copy of the data to run one over. Rather than fail on the insert,
-        # short-circuit here: if it is already loaded, hand back that run
-        # untouched (no new row, no re-run) instead of pretending a fresh
-        # run happened. Keyed on the first event's own `(source,
-        # source_row_id)`, which is stable source content, unlike `event_id`.
-        anchor = load_corpus().events[0]
-        existing_anchor = await session.scalar(
-            select(TransactionEventRow).where(
-                TransactionEventRow.tenant_id == user.tenant_id,
-                TransactionEventRow.source == anchor.source,
-                TransactionEventRow.source_row_id == anchor.source_row_id,
-            )
-        )
-        if existing_anchor is not None:
-            existing_run = await _load(session, existing_anchor.run_id)
-            return _run_out(existing_run)
+    # Loading the demo corpus twice used to be impossible, so this returned the
+    # existing run instead of failing. Both reasons are gone. `ix_te_guid` was
+    # UNIQUE (tenant_id, voucher_guid) and migration 0002 scoped it to the run;
+    # `uq_te_run_source_row` was always run-scoped; and `event_id` is remapped
+    # to this call's own issue_id below rather than trusting load_corpus()'s
+    # fixed-seed ids. Nothing now stops a second run over the same corpus.
+    #
+    # Keeping the short-circuit would be worse than useless: POST /runs would
+    # answer 200 with a run created days earlier, having done nothing — which
+    # is exactly how the Evaluation screen came to have no eval_results to show
+    # for any run anyone could reach.
 
     run_id = new_ulid("run_")
     ruleset = await resolve_ruleset(session, tenant_id=user.tenant_id)

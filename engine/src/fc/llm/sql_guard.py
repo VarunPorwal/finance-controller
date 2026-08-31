@@ -20,6 +20,7 @@ read-only role is optional hardening now, not the mechanism.)
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 import sqlglot
@@ -88,7 +89,7 @@ def guard(sql: str, *, tenant_id: str, max_rows: int = MAX_ROWS) -> str:
     partially processed, and inject the tenant predicate before applying the
     limit, so the limit applies to already-scoped rows.
     """
-    statements = _parse(sql)
+    statements = _parse(_strip_code_fence(sql))
     if len(statements) != 1:
         raise SqlRejected(
             f"expected exactly one statement, got {len(statements)} — "
@@ -110,11 +111,30 @@ def guard(sql: str, *, tenant_id: str, max_rows: int = MAX_ROWS) -> str:
     return tree.sql(dialect="postgres")
 
 
+#: The escape codes sqlglot embeds in a ParseError to underline the offending
+#: token. Fine in a terminal; they reached the API response verbatim and
+#: rendered as literal ``[4m`` in the browser.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+#: A fenced code block around the statement. Models wrap SQL in ```sql out of
+#: habit even when the schema asks for a bare string, and the schema cannot
+#: stop them. A fence is a formatting artifact, not an unsafe query, so it is
+#: removed rather than refused — the statement inside was always fine, and
+#: refusing taught the operator nothing they could act on.
+_FENCE = re.compile(r"\A\s*```[a-zA-Z]*[ \t]*\r?\n(?P<body>.*?)\r?\n?\s*```\s*\Z", re.DOTALL)
+
+
+def _strip_code_fence(sql: str) -> str:
+    match = _FENCE.match(sql)
+    return match.group("body") if match else sql
+
+
 def _parse(sql: str) -> list[exp.Expression]:
     try:
         parsed = sqlglot.parse(sql, dialect="postgres")
     except sqlglot.ParseError as exc:
-        raise SqlRejected(f"could not parse the generated SQL: {exc}") from exc
+        detail = " ".join(_ANSI.sub("", str(exc)).split())
+        raise SqlRejected(f"could not parse the generated SQL: {detail}") from exc
     return [statement for statement in parsed if isinstance(statement, exp.Expression)]
 
 

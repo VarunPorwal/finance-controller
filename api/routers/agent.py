@@ -24,6 +24,7 @@ one re-parse.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections.abc import Sequence
@@ -74,6 +75,8 @@ from fc.llm.sql_guard import MAX_ROWS, SqlRejected, guard
 from fc.models.command import CUT_VERBS, CommandPayload, ParsedCommand
 from fc.models.ids import new_ulid
 from fc.models.money import fmt_inr
+
+_LOG = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -1367,11 +1370,25 @@ async def _answer_via_sql(
     try:
         safe_sql = guard(plan.sql, tenant_id=user.tenant_id)
     except SqlRejected as exc:
+        # The reason is logged, never rendered. It used to be interpolated
+        # straight into refusal_reason, so a parse failure put sqlglot's token
+        # dump — ANSI underline escapes and all — on screen as the answer. §13.7
+        # wants a refusal plain and conversational; "Expecting ). Line 1, Col:
+        # 19" is neither, and there is nothing the reader could do with it.
+        _LOG.warning(
+            "sql guard rejected a generated query: %s | sql=%s", exc, plan.sql, exc_info=True
+        )
         return AskOut(
             answerable=False,
             tool="sql",
+            # The SQL still travels, so the query is inspectable in the UI's
+            # own "show the SQL" affordance — it is the *prose* that must not
+            # be a stack trace.
             sql=plan.sql,
-            refusal_reason=f"That query wasn't safe to run: {exc}",
+            refusal_reason=(
+                "I worked out a query for that but it didn't come back safe to run, "
+                "so I haven't run it. Try asking a narrower question, or rephrase it."
+            ),
             model_used=result.model,
             cached=result.cached,
         )
