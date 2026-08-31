@@ -9,15 +9,32 @@ import { PlaceholderPanel } from "@/components/placeholder-panel";
 
 export function ReconcilePanel() {
   const { summary, loading, error } = useRun();
-  const [highlightedEventIds, setHighlightedEventIds] = useState<string[] | null>(null);
-  const [gapFilterExceptionIds, setGapFilterExceptionIds] = useState<string[] | null>(null);
-  const [selectedExceptionId, setSelectedExceptionId] = useState<string | null>(null);
+  const [highlightedEventIds, setHighlightedEventIds] = useState<
+    string[] | null
+  >(null);
+  const [gapFilterExceptionIds, setGapFilterExceptionIds] = useState<
+    string[] | null
+  >(null);
+  const [selectedExceptionId, setSelectedExceptionId] = useState<string | null>(
+    null,
+  );
   const [queueSummary, setQueueSummary] = useState<QueueSummary | null>(null);
-  const handleQueueSummary = useCallback((s: QueueSummary) => setQueueSummary(s), []);
+  const [reloadKey, setReloadKey] = useState(0);
+  const handleApplied = useCallback(() => {
+    setReloadKey((k) => k + 1);
+    setSelectedExceptionId(null);
+  }, []);
+  const handleQueueSummary = useCallback(
+    (s: QueueSummary) => setQueueSummary(s),
+    [],
+  );
 
   if (loading) {
     return (
-      <div className="border-rule bg-ink-800 h-40 animate-pulse rounded-lg border" aria-hidden />
+      <div
+        className="border-rule bg-ink-800 h-40 animate-pulse rounded-lg border"
+        aria-hidden
+      />
     );
   }
   if (error || !summary) {
@@ -50,8 +67,9 @@ export function ReconcilePanel() {
         {queueSummary && (
           <p className="text-paper-100">
             {queueSummary.needsYouTotal} exceptions needing a human →{" "}
-            {queueSummary.clusterRows + queueSummary.standaloneRows} queue items (
-            {queueSummary.clusterRows} clusters, {queueSummary.standaloneRows} standalone)
+            {queueSummary.clusterRows + queueSummary.standaloneRows} queue items
+            ({queueSummary.clusterRows} clusters, {queueSummary.standaloneRows}{" "}
+            standalone)
           </p>
         )}
       </div>
@@ -65,8 +83,12 @@ export function ReconcilePanel() {
           selectedExceptionId={selectedExceptionId}
           onSelect={setSelectedExceptionId}
           onSummary={handleQueueSummary}
+          reloadKey={reloadKey}
         />
-        <EvidencePack exceptionId={selectedExceptionId} />
+        <EvidencePack
+          exceptionId={selectedExceptionId}
+          onApplied={handleApplied}
+        />
       </div>
     </div>
   );

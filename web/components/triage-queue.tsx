@@ -52,6 +52,7 @@ export function TriageQueue({
   highlightedEventIds,
   gapFilterExceptionIds,
   onClearGapFilter,
+  reloadKey,
   selectedExceptionId,
   onSelect,
   onSummary,
@@ -63,6 +64,9 @@ export function TriageQueue({
   selectedExceptionId: string | null;
   onSelect: (exceptionId: string) => void;
   onSummary?: (summary: QueueSummary) => void;
+  /** Bumped after an instruction applies, so the queue re-reads rather than
+   * showing rows the database has already resolved. */
+  reloadKey?: number;
 }) {
   const [exceptions, setExceptions] = useState<ExceptionOut[] | null>(null);
   const [clusters, setClusters] = useState<ClusterOut[]>([]);
@@ -72,24 +76,33 @@ export function TriageQueue({
     let cancelled = false;
     async function load() {
       const [exceptionsRes, clustersRes] = await Promise.all([
-        apiClient.GET("/api/v1/exceptions", { params: { query: { run_id: runId, limit: 200 } } }),
-        apiClient.GET("/api/v1/clusters", { params: { query: { run_id: runId, limit: 100 } } }),
+        apiClient.GET("/api/v1/exceptions", {
+          params: { query: { run_id: runId, limit: 200 } },
+        }),
+        apiClient.GET("/api/v1/clusters", {
+          params: { query: { run_id: runId, limit: 100 } },
+        }),
       ]);
       if (cancelled) return;
       if (exceptionsRes.error || !exceptionsRes.data) {
         setError("could not load exceptions");
         return;
       }
-      setExceptions(exceptionsRes.data.items.filter((e) => AWAITING_DECISION.has(e.status)));
+      setExceptions(
+        exceptionsRes.data.items.filter((e) => AWAITING_DECISION.has(e.status)),
+      );
       setClusters(clustersRes.data?.items ?? []);
     }
     void load();
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [runId, reloadKey]);
 
-  const clusterById = useMemo(() => new Map(clusters.map((c) => [c.cluster_id, c])), [clusters]);
+  const clusterById = useMemo(
+    () => new Map(clusters.map((c) => [c.cluster_id, c])),
+    [clusters],
+  );
   const highlightSet = useMemo(
     () => (highlightedEventIds ? new Set(highlightedEventIds) : null),
     [highlightedEventIds],
@@ -100,7 +113,11 @@ export function TriageQueue({
   // split rather than whatever subset happens to be on screen.
   const { trueNeedsYouRows, handledCount, needsYouTotal } = useMemo(() => {
     if (!exceptions) {
-      return { trueNeedsYouRows: [] as QueueRow[], handledCount: 0, needsYouTotal: 0 };
+      return {
+        trueNeedsYouRows: [] as QueueRow[],
+        handledCount: 0,
+        needsYouTotal: 0,
+      };
     }
     const needsYou = exceptions.filter((e) => e.tier !== "auto");
     const handled = exceptions.filter((e) => e.tier === "auto");
@@ -111,17 +128,25 @@ export function TriageQueue({
         if (seenClusters.has(exc.cluster_id)) continue;
         seenClusters.add(exc.cluster_id);
         const members = needsYou.filter((e) => e.cluster_id === exc.cluster_id);
-        rows.push(rowForCluster(clusterById.get(exc.cluster_id) ?? null, members));
+        rows.push(
+          rowForCluster(clusterById.get(exc.cluster_id) ?? null, members),
+        );
       } else {
         rows.push(rowForException(exc));
       }
     }
-    return { trueNeedsYouRows: rows, handledCount: handled.length, needsYouTotal: needsYou.length };
+    return {
+      trueNeedsYouRows: rows,
+      handledCount: handled.length,
+      needsYouTotal: needsYou.length,
+    };
   }, [exceptions, clusterById]);
 
   useEffect(() => {
     if (!exceptions) return;
-    const clusterRows = trueNeedsYouRows.filter((r) => r.memberExceptionIds.length > 1).length;
+    const clusterRows = trueNeedsYouRows.filter(
+      (r) => r.memberExceptionIds.length > 1,
+    ).length;
     onSummary?.({
       needsYouTotal,
       clusterRows,
@@ -141,11 +166,18 @@ export function TriageQueue({
     : trueNeedsYouRows;
 
   if (error) {
-    return <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">{error}</div>;
+    return (
+      <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">
+        {error}
+      </div>
+    );
   }
   if (!exceptions) {
     return (
-      <div className="border-rule bg-ink-800 h-64 animate-pulse rounded-lg border" aria-hidden />
+      <div
+        className="border-rule bg-ink-800 h-64 animate-pulse rounded-lg border"
+        aria-hidden
+      />
     );
   }
 
@@ -153,7 +185,9 @@ export function TriageQueue({
     <section aria-label="Triage queue" className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <h2 className="font-heading text-paper-300 text-xs font-semibold uppercase tracking-wide">
-          {gapFilterExceptionIds ? `Filtered to unexplained gap · ${needsYouRows.length}` : `Needs you · ${needsYouRows.length}`}
+          {gapFilterExceptionIds
+            ? `Filtered to unexplained gap · ${needsYouRows.length}`
+            : `Needs you · ${needsYouRows.length}`}
         </h2>
         {gapFilterExceptionIds && (
           <button
@@ -176,8 +210,12 @@ export function TriageQueue({
           <QueueRowItem
             key={row.key}
             row={row}
-            selected={row.memberExceptionIds.includes(selectedExceptionId ?? "")}
-            highlighted={Boolean(highlightSet && row.eventIds.some((id) => highlightSet.has(id)))}
+            selected={row.memberExceptionIds.includes(
+              selectedExceptionId ?? "",
+            )}
+            highlighted={Boolean(
+              highlightSet && row.eventIds.some((id) => highlightSet.has(id)),
+            )}
             onSelect={() => onSelect(row.exceptionId)}
           />
         ))}
@@ -199,7 +237,8 @@ export function TriageQueue({
                     row={row}
                     selected={selectedExceptionId === e.exception_id}
                     highlighted={Boolean(
-                      highlightSet && row.eventIds.some((id) => highlightSet.has(id)),
+                      highlightSet &&
+                      row.eventIds.some((id) => highlightSet.has(id)),
                     )}
                     onSelect={() => onSelect(row.exceptionId)}
                     muted
@@ -226,19 +265,26 @@ function rowForException(exc: ExceptionOut): QueueRow {
   };
 }
 
-function rowForCluster(cluster: ClusterOut | null, members: ExceptionOut[]): QueueRow {
+function rowForCluster(
+  cluster: ClusterOut | null,
+  members: ExceptionOut[],
+): QueueRow {
   const worstTier = members.some((m) => m.tier === "escalate")
     ? "escalate"
     : members.some((m) => m.tier === "monitor")
       ? "monitor"
       : "auto";
-  const totalPaise = cluster?.total_paise ?? members.reduce((sum, m) => sum + m.residual_paise, 0);
+  const totalPaise =
+    cluster?.total_paise ??
+    members.reduce((sum, m) => sum + m.residual_paise, 0);
   const first = members[0];
   return {
     key: cluster?.cluster_id ?? first.exception_id,
     tier: worstTier,
     amountPaise: totalPaise,
-    title: cluster?.label || `${members.length}× ${humanizeSnakeCase(first.category)}`,
+    title:
+      cluster?.label ||
+      `${members.length}× ${humanizeSnakeCase(first.category)}`,
     subtitle: `[CLUSTER] one root cause · ${members.length} items`,
     exceptionId: first.exception_id,
     eventIds: members.flatMap((m) => m.event_ids),
@@ -279,12 +325,18 @@ function QueueRowItem({
           <span className="flex items-baseline justify-between gap-2">
             <span
               className={
-                "truncate text-sm font-medium " + (muted ? "text-paper-300" : "text-paper-100")
+                "truncate text-sm font-medium " +
+                (muted ? "text-paper-300" : "text-paper-100")
               }
             >
               {row.title}
             </span>
-            <span className={"fc-numeric shrink-0 text-sm font-semibold " + TIER_COLOR[row.tier]}>
+            <span
+              className={
+                "fc-numeric shrink-0 text-sm font-semibold " +
+                TIER_COLOR[row.tier]
+              }
+            >
               {formatPaise(row.amountPaise)}
             </span>
           </span>
