@@ -1,50 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Download, ShieldCheck, ShieldAlert } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type AuditEvent = components["schemas"]["AuditEventOut"];
 type VerifyChainOut = components["schemas"]["VerifyChainOut"];
 type AuditBundle = { events: AuditEvent[]; chain: VerifyChainOut | null };
 
+export async function fetchAuditBundle(runId: string | undefined): Promise<AuditBundle> {
+  const [eventsRes, chainRes] = await Promise.all([
+    apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 100 } } }),
+    apiClient.GET("/api/v1/audit/verify-chain", { params: { query: {} } }),
+  ]);
+  return { events: eventsRes.data?.items ?? [], chain: chainRes.data ?? null };
+}
+
 export default function AuditPage() {
   const { summary } = useRun();
   const runId = summary?.run.run_id;
-  const cacheKey = `audit:${runId ?? "all"}`;
-  const cached = cacheGet<AuditBundle>(cacheKey);
-  const [events, setEvents] = useState<AuditEvent[] | null>(cached?.events ?? null);
-  const [chain, setChain] = useState<VerifyChainOut | null>(cached?.chain ?? null);
+  const { data } = useQuery({
+    queryKey: queryKeys.auditPage(runId),
+    queryFn: () => fetchAuditBundle(runId),
+  });
+  const events = data?.events ?? null;
+  const chain = data?.chain ?? null;
   const [exporting, setExporting] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const key = `audit:${runId ?? "all"}`;
-    const seeded = cacheGet<AuditBundle>(key);
-    if (seeded) {
-      setEvents(seeded.events);
-      setChain(seeded.chain);
-    }
-    async function load() {
-      const [eventsRes, chainRes] = await Promise.all([
-        apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 100 } } }),
-        apiClient.GET("/api/v1/audit/verify-chain", { params: { query: {} } }),
-      ]);
-      if (cancelled) return;
-      const bundle: AuditBundle = { events: eventsRes.data?.items ?? [], chain: chainRes.data ?? null };
-      cacheSet(key, bundle);
-      setEvents(bundle.events);
-      setChain(bundle.chain);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
 
   async function exportAudit(format: "csv" | "jsonl") {
     setExporting(true);

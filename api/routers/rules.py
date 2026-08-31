@@ -267,11 +267,22 @@ async def _historical_cases(session: AsyncSession, tenant_id: str) -> list[Histo
             )
         )
     ).all()
+    first_event_ids = [row.event_ids[0] for row in rows if row.event_ids]
+    event_rows = (
+        (
+            await session.scalars(
+                select(TransactionEventRow).where(TransactionEventRow.event_id.in_(first_event_ids))
+            )
+        ).all()
+        if first_event_ids
+        else []
+    )
+    event_by_id = {e.event_id: e for e in event_rows}
     cases: list[HistoricalCase] = []
     for row in rows:
         if not row.event_ids:
             continue
-        event_row = await session.get(TransactionEventRow, row.event_ids[0])
+        event_row = event_by_id.get(row.event_ids[0])
         if event_row is None:
             continue
         cases.append(

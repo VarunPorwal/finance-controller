@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
 import {
   formatDecimalPercent,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/format";
 import { TIER_COLOR, TIER_LABEL } from "@/lib/tier";
 import { InstructionBox } from "@/components/instruction-box";
+import { queryKeys } from "@/lib/query-keys";
 
 type Evidence = components["schemas"]["ExceptionEvidenceOut"];
 
@@ -27,32 +28,19 @@ export function EvidencePack({
   exceptionId: string | null;
   onApplied: () => void;
 }) {
-  const [evidence, setEvidence] = useState<Evidence | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!exceptionId) {
-      setEvidence(null);
-      return;
-    }
-    let cancelled = false;
-    async function load() {
+  const { data: evidence, error: queryError } = useQuery({
+    queryKey: queryKeys.exceptionEvidence(exceptionId),
+    queryFn: async () => {
       const { data, error: fetchError } = await apiClient.GET(
         "/api/v1/exceptions/{exception_id}/evidence",
         { params: { path: { exception_id: exceptionId as string } } },
       );
-      if (cancelled) return;
-      if (fetchError || !data) {
-        setError("could not load evidence");
-        return;
-      }
-      setEvidence(data);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [exceptionId]);
+      if (fetchError || !data) throw new Error("could not load evidence");
+      return data;
+    },
+    enabled: !!exceptionId,
+  });
+  const error = queryError ? "could not load evidence" : null;
 
   if (!exceptionId) {
     return (

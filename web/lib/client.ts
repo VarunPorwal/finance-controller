@@ -13,6 +13,10 @@ const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 // A demo bearer token baked in at build time (PRD §9.1: buildathon reality,
 // single-tenant demo). Never read from localStorage/sessionStorage — that is
 // forbidden project-wide — and never anything a user typed in.
+//
+// Deliberately public in the client bundle, not an oversight: this is a
+// single-tenant demo build with no real credentials behind it. A production
+// deployment would move auth server-side before this token ships anywhere.
 const demoToken = process.env.NEXT_PUBLIC_DEMO_TOKEN ?? "";
 
 export const apiClient = createClient<paths>({

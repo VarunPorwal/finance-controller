@@ -1,30 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
+import { queryKeys } from "@/lib/query-keys";
 
 type Health = components["schemas"]["api__routers__agent__HealthOut"];
 
 /**
  * PRD §13.5 header: "Flash-Lite ✓ Flash ✓ · Groq standby · 4 calls · 2 cached".
  * One glance answers "is this thing actually calling a model, and how much."
+ * Polls every 15s regardless of the 5-minute default staleTime — this is
+ * live status, not run-scoped data that only changes when a run happens.
  */
 export function StatusStrip() {
-  const [health, setHealth] = useState<Health | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      const { data } = await apiClient.GET("/api/v1/agent/health", { params: { query: {} } });
-      if (!cancelled && data) setHealth(data);
-    };
-    void load();
-    const interval = setInterval(load, 15_000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
+  const { data: health } = useQuery({
+    queryKey: queryKeys.agentHealth,
+    queryFn: async () => (await apiClient.GET("/api/v1/agent/health", { params: { query: {} } })).data ?? null,
+    staleTime: 0,
+    refetchInterval: 15_000,
+  });
 
   if (!health) {
     return <span className="text-text-muted text-xs">model status —</span>;

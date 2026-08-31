@@ -34,7 +34,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.audit_log import append_audit
@@ -590,21 +590,31 @@ _REF_COLUMNS = (
 
 
 async def _resolve_reference(session: AsyncSession, ref: str) -> list[RefCandidate]:
-    out: list[RefCandidate] = []
-    for kind, column in _REF_COLUMNS:
-        rows = (
-            await session.scalars(select(TransactionEventRow).where(column == ref).limit(5))
-        ).all()
-        out.extend(
-            RefCandidate(
-                ref=ref,
-                kind=kind,
-                amount_paise=r.amount_paise,
-                txn_date=r.txn_date,
-                event_id=r.event_id,
+    rows = (
+        await session.scalars(
+            select(TransactionEventRow).where(
+                or_(*(column == ref for _, column in _REF_COLUMNS))
             )
-            for r in rows
         )
+    ).all()
+    out: list[RefCandidate] = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        for kind, column in _REF_COLUMNS:
+            if getattr(r, column.key) != ref:
+                continue
+            if counts.get(kind, 0) >= 5:
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+            out.append(
+                RefCandidate(
+                    ref=ref,
+                    kind=kind,
+                    amount_paise=r.amount_paise,
+                    txn_date=r.txn_date,
+                    event_id=r.event_id,
+                )
+            )
     return out
 
 
@@ -612,23 +622,33 @@ async def _near_references(session: AsyncSession, ref: str) -> list[RefCandidate
     fragment = ref.split("_", 1)[-1][:6]
     if len(fragment) < 3:
         return []
-    out: list[RefCandidate] = []
-    for kind, column in _REF_COLUMNS:
-        rows = (
-            await session.scalars(
-                select(TransactionEventRow).where(column.ilike(f"%{fragment}%")).limit(3)
+    pattern = f"%{fragment}%"
+    rows = (
+        await session.scalars(
+            select(TransactionEventRow).where(
+                or_(*(column.ilike(pattern) for _, column in _REF_COLUMNS))
             )
-        ).all()
-        out.extend(
-            RefCandidate(
-                ref=getattr(r, f"{kind}_id", None) or getattr(r, "voucher_number", None) or ref,
-                kind=kind,
-                amount_paise=r.amount_paise,
-                txn_date=r.txn_date,
-                event_id=r.event_id,
-            )
-            for r in rows
         )
+    ).all()
+    out: list[RefCandidate] = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        for kind, column in _REF_COLUMNS:
+            value = getattr(r, column.key)
+            if value is None or fragment.lower() not in value.lower():
+                continue
+            if counts.get(kind, 0) >= 3:
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+            out.append(
+                RefCandidate(
+                    ref=getattr(r, f"{kind}_id", None) or getattr(r, "voucher_number", None) or ref,
+                    kind=kind,
+                    amount_paise=r.amount_paise,
+                    txn_date=r.txn_date,
+                    event_id=r.event_id,
+                )
+            )
     return out[:5]
 
 

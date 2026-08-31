@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaiseWhole } from "@/lib/format";
+import { queryKeys } from "@/lib/query-keys";
 
 type CashBridge = components["schemas"]["CashBridgeOut"];
 
@@ -27,28 +29,19 @@ export function ReconciliationBridge({
   onHoverSegment: (eventIds: string[] | null) => void;
   onSelectGap: (exceptionIds: string[] | null) => void;
 }) {
-  const [bridge, setBridge] = useState<CashBridge | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [gapSelected, setGapSelected] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
+  const { data: bridge, error: queryError } = useQuery({
+    queryKey: queryKeys.cashBridge(runId),
+    queryFn: async () => {
       const { data, error: fetchError } = await apiClient.GET("/api/v1/cash/bridge", {
         params: { query: { run_id: runId } },
       });
-      if (cancelled) return;
-      if (fetchError || !data) {
-        setError("could not load the cash bridge");
-        return;
-      }
-      setBridge(data);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+      if (fetchError || !data) throw new Error("could not load the cash bridge");
+      return data;
+    },
+  });
+  const error = queryError ? "could not load the cash bridge" : null;
 
   if (error) {
     return <div className="fc-card p-4 text-sm text-amber-text">{error}</div>;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 
@@ -43,7 +44,6 @@ export function InstructionBox({
   const [parsed, setParsed] = useState<ParseOut | null>(null);
   const [typedConfirmation, setTypedConfirmation] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
-  const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<ExecuteOut | null>(null);
   const [error, setError] = useState<Refusal | null>(null);
 
@@ -117,16 +117,18 @@ export function InstructionBox({
     }
   }
 
-  async function execute(applyToCluster: boolean) {
-    if (!parsed) return;
-    setExecuting(true);
-    setError(null);
-    try {
-      const {
-        data,
-        error: execError,
-        response,
-      } = await apiClient.POST("/api/v1/agent/execute", {
+  const queryClient = useQueryClient();
+
+  // resolve/write_off/snooze/reclassify all funnel through this one execute
+  // call — the verb is decided server-side (preview.effects[].action), not
+  // by this component. Optimistic: the exception this instruction targets
+  // leaves any exceptions/triage list in the cache immediately; rolled back
+  // in onError, and every exceptions-shaped query is invalidated on settle
+  // since a cluster apply can affect ids this component never sees.
+  const executeMutation = useMutation({
+    mutationFn: async (applyToCluster: boolean) => {
+      if (!parsed) throw new Error("nothing parsed");
+      const { data, error: execError, response } = await apiClient.POST("/api/v1/agent/execute", {
         body: {
           command_id: parsed.command_id,
           confirmed: true,
@@ -136,23 +138,41 @@ export function InstructionBox({
         },
       });
       if (execError || !data) {
-        setError(refusalFromError(execError, response.status));
-        return;
+        throw Object.assign(new Error("execute failed"), { refusal: refusalFromError(execError, response.status) });
       }
+      return data;
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["exceptions"] });
+      const snapshots = queryClient.getQueriesData<unknown>({ queryKey: ["exceptions"] });
+      queryClient.setQueriesData<Array<{ exception: { exception_id: string } }>>(
+        { queryKey: ["exceptions"] },
+        (old) => (Array.isArray(old) ? old.filter((r) => r.exception?.exception_id !== exceptionId) : old),
+      );
+      return { snapshots };
+    },
+    onError: (err, _vars, context) => {
+      context?.snapshots.forEach(([key, value]) => queryClient.setQueryData(key, value));
+      const withRefusal = err as unknown as { refusal?: Refusal };
+      setError(withRefusal.refusal ?? { code: "network", message: "Could not reach the API.", candidates: [] });
+    },
+    onSuccess: (data) => {
       setResult(data);
       setText("");
       setParsed(null);
       onApplied();
-    } catch {
-      setError({
-        code: "network",
-        message: "Could not reach the API.",
-        candidates: [],
-      });
-    } finally {
-      setExecuting(false);
-    }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["exceptions"] });
+      void queryClient.invalidateQueries({ queryKey: ["exception", exceptionId] });
+    },
+  });
+
+  function execute(applyToCluster: boolean) {
+    executeMutation.mutate(applyToCluster);
   }
+
+  const executing = executeMutation.isPending;
 
   const preview = parsed?.preview;
   const refusal = preview?.refusal ?? null;

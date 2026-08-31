@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, humanizeSnakeCase } from "@/lib/format";
 import { TIER_COLOR, TIER_DOT } from "@/lib/tier";
+import { queryKeys } from "@/lib/query-keys";
 
 type ExceptionOut = components["schemas"]["Exception_"];
 type ClusterOut = components["schemas"]["Cluster"];
@@ -68,36 +70,25 @@ export function TriageQueue({
    * showing rows the database has already resolved. */
   reloadKey?: number;
 }) {
-  const [exceptions, setExceptions] = useState<ExceptionOut[] | null>(null);
-  const [clusters, setClusters] = useState<ClusterOut[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
+  const { data, error: queryError } = useQuery({
+    queryKey: [...queryKeys.exceptions(runId, { scope: "triage" }), reloadKey ?? 0],
+    queryFn: async () => {
       const [exceptionsRes, clustersRes] = await Promise.all([
-        apiClient.GET("/api/v1/exceptions", {
-          params: { query: { run_id: runId, limit: 200 } },
-        }),
-        apiClient.GET("/api/v1/clusters", {
-          params: { query: { run_id: runId, limit: 100 } },
-        }),
+        apiClient.GET("/api/v1/exceptions", { params: { query: { run_id: runId, limit: 200 } } }),
+        apiClient.GET("/api/v1/clusters", { params: { query: { run_id: runId, limit: 100 } } }),
       ]);
-      if (cancelled) return;
       if (exceptionsRes.error || !exceptionsRes.data) {
-        setError("could not load exceptions");
-        return;
+        throw new Error("could not load exceptions");
       }
-      setExceptions(
-        exceptionsRes.data.items.filter((e) => AWAITING_DECISION.has(e.status)),
-      );
-      setClusters(clustersRes.data?.items ?? []);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, reloadKey]);
+      return {
+        exceptions: exceptionsRes.data.items.filter((e) => AWAITING_DECISION.has(e.status)),
+        clusters: clustersRes.data?.items ?? [],
+      };
+    },
+  });
+  const exceptions = data?.exceptions ?? null;
+  const clusters = useMemo(() => data?.clusters ?? [], [data]);
+  const error = queryError ? "could not load exceptions" : null;
 
   const clusterById = useMemo(
     () => new Map(clusters.map((c) => [c.cluster_id, c])),

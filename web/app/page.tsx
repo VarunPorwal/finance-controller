@@ -1,22 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RefreshCw, Download, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPercent } from "@/lib/format";
+import { queryKeys } from "@/lib/query-keys";
 import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { InteractiveTrendChart } from "@/components/ui/interactive-trend-chart";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
-type EventCount = components["schemas"]["EventCountOut"];
-type EvalResult = components["schemas"]["EvalResultOut"];
 interface HistoryPoint {
   label: string;
   eventCount: number;
@@ -24,8 +22,6 @@ interface HistoryPoint {
 }
 interface HomeBundle {
   prevSummary: RunSummary | null;
-  counts: EventCount | null;
-  evalResult: EvalResult | null;
   history: HistoryPoint[];
 }
 
@@ -37,83 +33,60 @@ const SOURCE_COLOR: Record<string, string> = {
   bank: "var(--amber)",
 };
 
+export async function fetchHomeBundle(runId: string): Promise<HomeBundle> {
+  const runsRes = await apiClient.GET("/api/v1/runs", {
+    params: { query: { status: "complete", kind: "original", limit: HISTORY_WINDOW } },
+  });
+  const runs = runsRes.data?.items ?? []; // newest first
+  let prev: RunSummary | null = null;
+  const olderRunId = runs.find((r) => r.run_id !== runId)?.run_id;
+  if (olderRunId) {
+    const { data } = await apiClient.GET("/api/v1/runs/{run_id}/summary", {
+      params: { path: { run_id: olderRunId } },
+    });
+    prev = data ?? null;
+  }
+
+  const chronological = [...runs].reverse(); // oldest first, for a left-to-right trend
+  const summaries = await Promise.all(
+    chronological.map((r) =>
+      apiClient.GET("/api/v1/runs/{run_id}/summary", { params: { path: { run_id: r.run_id } } }),
+    ),
+  );
+  const history: HistoryPoint[] = chronological.map((r, i) => {
+    const s = summaries[i].data;
+    return {
+      label: new Date(r.started_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+      eventCount: s?.event_count ?? 0,
+      autoMatched: s ? s.event_count - s.exception_count : 0,
+    };
+  });
+
+  return { prevSummary: prev, history };
+}
+
 export default function ReconcileHome() {
   const { summary, loading, error } = useRun();
   const router = useRouter();
   const runId = summary?.run.run_id;
-  const cacheKey = `home:${runId ?? "none"}`;
-  const cached = cacheGet<HomeBundle>(cacheKey);
-  const [prevSummary, setPrevSummary] = useState<RunSummary | null>(cached?.prevSummary ?? null);
-  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
-  const [evalResult, setEvalResult] = useState<EvalResult | null>(cached?.evalResult ?? null);
-  const [history, setHistory] = useState<HistoryPoint[]>(cached?.history ?? []);
 
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const key = `home:${runId}`;
-    const seeded = cacheGet<HomeBundle>(key);
-    if (seeded) {
-      setPrevSummary(seeded.prevSummary);
-      setCounts(seeded.counts);
-      setEvalResult(seeded.evalResult);
-      setHistory(seeded.history);
-    }
-    async function load() {
-      const [runsRes, countRes, evalRes] = await Promise.all([
-        apiClient.GET("/api/v1/runs", {
-          params: { query: { status: "complete", kind: "original", limit: HISTORY_WINDOW } },
-        }),
-        apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
-        apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId! } } }),
-      ]);
-      if (cancelled) return;
-      const runs = runsRes.data?.items ?? []; // newest first
-      let prev: RunSummary | null = null;
-      if (runs.length > 1) {
-        const olderRunId = runs.find((r) => r.run_id !== runId)?.run_id;
-        if (olderRunId) {
-          const { data } = await apiClient.GET("/api/v1/runs/{run_id}/summary", {
-            params: { path: { run_id: olderRunId } },
-          });
-          if (cancelled) return;
-          prev = data ?? null;
-        }
-      }
-
-      const chronological = [...runs].reverse(); // oldest first, for a left-to-right trend
-      const summaries = await Promise.all(
-        chronological.map((r) =>
-          apiClient.GET("/api/v1/runs/{run_id}/summary", { params: { path: { run_id: r.run_id } } }),
-        ),
-      );
-      if (cancelled) return;
-      const historyPoints: HistoryPoint[] = chronological.map((r, i) => {
-        const s = summaries[i].data;
-        return {
-          label: new Date(r.started_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
-          eventCount: s?.event_count ?? 0,
-          autoMatched: s ? s.event_count - s.exception_count : 0,
-        };
-      });
-
-      const bundle: HomeBundle = {
-        prevSummary: prev,
-        counts: countRes.data ?? null,
-        evalResult: evalRes.data ?? null,
-        history: historyPoints,
-      };
-      cacheSet(key, bundle);
-      setPrevSummary(bundle.prevSummary);
-      setCounts(bundle.counts);
-      setEvalResult(bundle.evalResult);
-      setHistory(bundle.history);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+  const { data: home } = useQuery({
+    queryKey: queryKeys.homeHistory(runId),
+    queryFn: () => fetchHomeBundle(runId!),
+    enabled: !!runId,
+  });
+  const { data: counts } = useQuery({
+    queryKey: queryKeys.eventsCount(runId),
+    queryFn: async () => (await apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId! } } })).data ?? null,
+    enabled: !!runId,
+  });
+  const { data: evalResult } = useQuery({
+    queryKey: queryKeys.eval(runId),
+    queryFn: async () => (await apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId! } } })).data ?? null,
+    enabled: !!runId,
+  });
+  const prevSummary = home?.prevSummary ?? null;
+  const history = home?.history ?? [];
 
   if (loading) return <div className="fc-card h-40 animate-pulse" aria-hidden />;
   if (error || !summary) {

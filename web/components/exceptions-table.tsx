@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Landmark, Database, CreditCard } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, formatDecimalPercent, humanizeSnakeCase } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type ExceptionOut = components["schemas"]["Exception_"];
 type ClusterOut = components["schemas"]["Cluster"];
@@ -32,6 +33,43 @@ interface Row {
   reference: string;
 }
 
+async function fetchRows(runId: string, limit: number | undefined): Promise<Row[]> {
+  const [excRes, clusterRes] = await Promise.all([
+    apiClient.GET("/api/v1/exceptions", { params: { query: { run_id: runId, status: "open", limit: 200 } } }),
+    apiClient.GET("/api/v1/clusters", { params: { query: { run_id: runId, limit: 100 } } }),
+  ]);
+  if (excRes.error || !excRes.data) {
+    throw new Error("could not load exceptions");
+  }
+  const clusters = clusterRes.data?.items ?? [];
+  const clusterById = new Map(clusters.map((c: ClusterOut) => [c.cluster_id, c]));
+  const visible = limit ? excRes.data.items.slice(0, limit) : excRes.data.items;
+  const evidences = await Promise.all(
+    visible.map((exc) =>
+      apiClient.GET("/api/v1/exceptions/{exception_id}/evidence", {
+        params: { path: { exception_id: exc.exception_id } },
+      }),
+    ),
+  );
+  return visible.map((exc, i) => {
+    const firstEvent = evidences[i].data?.events?.[0];
+    return {
+      exception: exc,
+      clusterLabel: exc.cluster_id
+        ? (clusterById.get(exc.cluster_id)?.label ?? humanizeSnakeCase(exc.category))
+        : humanizeSnakeCase(exc.category),
+      counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
+      source: firstEvent?.source ?? "razorpay",
+      reference:
+        firstEvent?.utr ??
+        firstEvent?.settlement_id ??
+        firstEvent?.order_id ??
+        firstEvent?.voucher_number ??
+        "—",
+    };
+  });
+}
+
 /**
  * design/README.md's "Decisions requiring attention" / Exceptions table,
  * shared by the Reconcile home (top 5, no filters, no link) and the full
@@ -53,83 +91,40 @@ export function ExceptionsTable({
   linkTo?: (exceptionId: string) => string;
   enableBulk?: boolean;
 }) {
-  const rowsCacheKey = `exceptions:${runId}:${limit ?? "all"}`;
-  const [exceptions, setExceptions] = useState<ExceptionOut[] | null>(null);
-  const [clusters, setClusters] = useState<ClusterOut[]>([]);
-  const [rows, setRows] = useState<Row[] | null>(() => cacheGet<Row[]>(rowsCacheKey) ?? null);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const rowsQueryKey = queryKeys.exceptions(runId, { limit: limit ?? "all" });
+  const { data: rows, error } = useQuery({
+    queryKey: rowsQueryKey,
+    queryFn: () => fetchRows(runId, limit),
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    let cancelled = false;
-    const seeded = cacheGet<Row[]>(`exceptions:${runId}:${limit ?? "all"}`);
-    if (seeded) setRows(seeded);
-    async function load() {
-      const [excRes, clusterRes] = await Promise.all([
-        apiClient.GET("/api/v1/exceptions", {
-          params: { query: { run_id: runId, status: "open", limit: 200 } },
-        }),
-        apiClient.GET("/api/v1/clusters", { params: { query: { run_id: runId, limit: 100 } } }),
-      ]);
-      if (cancelled) return;
-      if (excRes.error || !excRes.data) {
-        setError("could not load exceptions");
-        return;
-      }
-      setExceptions(excRes.data.items);
-      setClusters(clusterRes.data?.items ?? []);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, limit]);
-
-  const clusterById = useMemo(
-    () => new Map(clusters.map((c) => [c.cluster_id, c])),
-    [clusters],
-  );
-
-  useEffect(() => {
-    if (!exceptions) return;
-    let cancelled = false;
-    async function loadEvidence() {
-      const visible = limit ? exceptions!.slice(0, limit) : exceptions!;
-      const evidences = await Promise.all(
-        visible.map((exc) =>
-          apiClient.GET("/api/v1/exceptions/{exception_id}/evidence", {
-            params: { path: { exception_id: exc.exception_id } },
-          }),
-        ),
-      );
-      if (cancelled) return;
-      const nextRows = visible.map((exc, i) => {
-        const firstEvent = evidences[i].data?.events?.[0];
-        return {
-          exception: exc,
-          clusterLabel: exc.cluster_id
-            ? (clusterById.get(exc.cluster_id)?.label ?? humanizeSnakeCase(exc.category))
-            : humanizeSnakeCase(exc.category),
-          counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
-          source: firstEvent?.source ?? "razorpay",
-          reference:
-            firstEvent?.utr ??
-            firstEvent?.settlement_id ??
-            firstEvent?.order_id ??
-            firstEvent?.voucher_number ??
-            "—",
-        };
+  const bulkMutation = useMutation({
+    mutationFn: async ({ action, reason, exceptionIds }: { action: BulkActionKind; reason: string; exceptionIds: string[] }) => {
+      const { data } = await apiClient.POST("/api/v1/exceptions/bulk", {
+        body: { exception_ids: exceptionIds, action, reason },
       });
-      cacheSet(`exceptions:${runId}:${limit ?? "all"}`, nextRows);
-      setRows(nextRows);
-    }
-    void loadEvidence();
-    return () => {
-      cancelled = true;
-    };
-  }, [exceptions, clusterById, limit, runId]);
+      return data;
+    },
+    onMutate: async ({ exceptionIds }) => {
+      await queryClient.cancelQueries({ queryKey: rowsQueryKey });
+      const previous = queryClient.getQueryData<Row[]>(rowsQueryKey);
+      // Optimistic: the rows leave the queue immediately. Rolled back in
+      // onError if the bulk action doesn't actually apply.
+      queryClient.setQueryData<Row[]>(rowsQueryKey, (old) =>
+        (old ?? []).filter((r) => !exceptionIds.includes(r.exception.exception_id)),
+      );
+      setSelected(new Set());
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(rowsQueryKey, context.previous);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: rowsQueryKey });
+    },
+  });
 
   const filtered = (rows ?? []).filter((r) => {
     if (!statusFilter || statusFilter === "all") return true;
@@ -137,7 +132,7 @@ export function ExceptionsTable({
     return r.exception.tier === "auto";
   });
 
-  if (error) return <div className="fc-card p-4 text-sm text-amber-text">{error}</div>;
+  if (error) return <div className="fc-card p-4 text-sm text-amber-text">{(error as Error).message}</div>;
   if (!rows) return <div className="fc-card h-64 animate-pulse" aria-hidden />;
 
   function toggleAll() {
@@ -155,19 +150,10 @@ export function ExceptionsTable({
     });
   }
 
-  async function runBulk(action: BulkActionKind) {
+  function runBulk(action: BulkActionKind) {
     const reason = window.prompt(`Reason to ${action.replace("_", " ")} ${selected.size} exception(s):`);
     if (!reason?.trim()) return;
-    setBulkSubmitting(true);
-    const exceptionIds = Array.from(selected);
-    const { data } = await apiClient.POST("/api/v1/exceptions/bulk", {
-      body: { exception_ids: exceptionIds, action, reason: reason.trim() },
-    });
-    setBulkSubmitting(false);
-    if (!data) return;
-    const okIds = new Set(data.results.filter((r) => r.ok).map((r) => r.exception_id));
-    setExceptions((prev) => (prev ?? []).filter((e) => !okIds.has(e.exception_id)));
-    setSelected(new Set());
+    bulkMutation.mutate({ action, reason: reason.trim(), exceptionIds: Array.from(selected) });
   }
 
   return (
@@ -178,7 +164,7 @@ export function ExceptionsTable({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              disabled={bulkSubmitting}
+              disabled={bulkMutation.isPending}
               onClick={() => runBulk("resolve")}
               className="rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success disabled:opacity-50"
             >
@@ -186,7 +172,7 @@ export function ExceptionsTable({
             </button>
             <button
               type="button"
-              disabled={bulkSubmitting}
+              disabled={bulkMutation.isPending}
               onClick={() => runBulk("write_off")}
               className="rounded-[7px] border border-border px-3 py-1.5 text-xs font-semibold text-text-body disabled:opacity-50"
             >
@@ -194,7 +180,7 @@ export function ExceptionsTable({
             </button>
             <button
               type="button"
-              disabled={bulkSubmitting}
+              disabled={bulkMutation.isPending}
               onClick={() => runBulk("escalate")}
               className="rounded-[7px] bg-error-bg px-3 py-1.5 text-xs font-semibold text-error disabled:opacity-50"
             >

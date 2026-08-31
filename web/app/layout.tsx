@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/app-shell";
 import { RunProvider } from "@/lib/run-context";
+import { QueryProvider } from "@/lib/query-client";
 
 // PRD §13.3 (rewritten 31 Aug 2026): Inter for every UI face — headings
 // included, max weight 600, no separate display font — and JetBrains Mono
@@ -35,9 +36,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="antialiased">
-        <RunProvider>
-          <AppShell>{children}</AppShell>
-        </RunProvider>
+        <QueryProvider>
+          <RunProvider>
+            <AppShell>{children}</AppShell>
+          </RunProvider>
+        </QueryProvider>
       </body>
     </html>
   );

@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type EvalResult = components["schemas"]["EvalResultOut"];
 type ConfusionOut = components["schemas"]["ConfusionOut"];
@@ -24,44 +24,30 @@ const STAGE_LABEL: Record<string, string> = {
   many_to_one: "Many-to-one / subset-sum match",
 };
 
+export async function fetchEvalBundle(runId: string): Promise<EvalBundle> {
+  const [evalRes, confusionRes, coverageRes] = await Promise.all([
+    apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }),
+    apiClient.GET("/api/v1/eval/{run_id}/confusion", { params: { path: { run_id: runId } } }),
+    apiClient.GET("/api/v1/eval/{run_id}/coverage-curve", { params: { path: { run_id: runId } } }),
+  ]);
+  return {
+    evalResult: evalRes.data ?? null,
+    confusion: confusionRes.data ?? null,
+    coverageCurve: coverageRes.data ?? null,
+  };
+}
+
 export default function EvaluationPage() {
   const { summary } = useRun();
   const runId = summary?.run.run_id;
-  const cacheKey = runId ? `eval:${runId}` : null;
-  const cached = cacheGet<EvalBundle>(cacheKey);
-  const [evalResult, setEvalResult] = useState<EvalResult | null | undefined>(cached ? cached.evalResult : undefined);
-  const [confusion, setConfusion] = useState<ConfusionOut | null>(cached?.confusion ?? null);
-  const [coverageCurve, setCoverageCurve] = useState<CoverageCurveOut | null>(cached?.coverageCurve ?? null);
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const seeded = cacheGet<EvalBundle>(`eval:${runId}`);
-    if (seeded) {
-      setEvalResult(seeded.evalResult);
-      setConfusion(seeded.confusion);
-      setCoverageCurve(seeded.coverageCurve);
-    }
-    Promise.all([
-      apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }),
-      apiClient.GET("/api/v1/eval/{run_id}/confusion", { params: { path: { run_id: runId } } }),
-      apiClient.GET("/api/v1/eval/{run_id}/coverage-curve", { params: { path: { run_id: runId } } }),
-    ]).then(([evalRes, confusionRes, coverageRes]) => {
-      if (cancelled) return;
-      const bundle: EvalBundle = {
-        evalResult: evalRes.data ?? null,
-        confusion: confusionRes.data ?? null,
-        coverageCurve: coverageRes.data ?? null,
-      };
-      cacheSet(`eval:${runId}`, bundle);
-      setEvalResult(bundle.evalResult);
-      setConfusion(bundle.confusion);
-      setCoverageCurve(bundle.coverageCurve);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+  const { data, isFetched } = useQuery({
+    queryKey: queryKeys.evalBundle(runId),
+    queryFn: () => fetchEvalBundle(runId!),
+    enabled: !!runId,
+  });
+  const evalResult = !runId || isFetched ? (data?.evalResult ?? null) : undefined;
+  const confusion = data?.confusion ?? null;
+  const coverageCurve = data?.coverageCurve ?? null;
 
   return (
     <div>

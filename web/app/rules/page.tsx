@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Plus, Sparkle } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
@@ -9,12 +10,11 @@ import { FilterPills } from "@/components/ui/filter-pills";
 import { StatusPill } from "@/components/ui/status-pill";
 import { RuleAuthoringForm, type RuleSubmitPayload } from "@/components/rule-authoring-form";
 import { BacktestDialog } from "@/components/backtest-dialog";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type Rule = components["schemas"]["Rule"];
 type SuggestionOut = components["schemas"]["SuggestionOut"];
 type BacktestOut = components["schemas"]["BacktestOut"];
-type RulesBundle = { rules: Rule[]; suggestions: SuggestionOut[] };
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -23,42 +23,31 @@ const FILTERS = [
   { value: "retired", label: "Archived" },
 ];
 
+export async function fetchRulesAndSuggestions() {
+  const [rulesRes, suggestionsRes] = await Promise.all([
+    apiClient.GET("/api/v1/rules", { params: { query: {} } }),
+    apiClient.GET("/api/v1/rules/suggestions", {}),
+  ]);
+  return { rules: rulesRes.data ?? [], suggestions: suggestionsRes.data ?? [] };
+}
+
 export default function RuleBookPage() {
   const router = useRouter();
-  const cached = cacheGet<RulesBundle>("rules");
-  const [rules, setRules] = useState<Rule[] | null>(cached?.rules ?? null);
-  const [suggestions, setSuggestions] = useState<SuggestionOut[]>(cached?.suggestions ?? []);
-  const [affected, setAffected] = useState<Record<string, BacktestOut>>({});
+  const queryClient = useQueryClient();
+  const { data } = useQuery({
+    queryKey: queryKeys.rules({}),
+    queryFn: fetchRulesAndSuggestions,
+  });
+  const rules = data?.rules ?? null;
+  const suggestions: SuggestionOut[] = data?.suggestions ?? [];
   const [status, setStatus] = useState("all");
   const [creating, setCreating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [pendingBacktest, setPendingBacktest] = useState<{ ruleId: string; version: number; name: string } | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const seeded = cacheGet<RulesBundle>("rules");
-    if (seeded && reloadKey === 0) {
-      setRules(seeded.rules);
-      setSuggestions(seeded.suggestions);
-    }
-    async function load() {
-      const [rulesRes, suggestionsRes] = await Promise.all([
-        apiClient.GET("/api/v1/rules", { params: { query: {} } }),
-        apiClient.GET("/api/v1/rules/suggestions", {}),
-      ]);
-      if (cancelled) return;
-      const bundle: RulesBundle = { rules: rulesRes.data ?? [], suggestions: suggestionsRes.data ?? [] };
-      cacheSet("rules", bundle);
-      setRules(bundle.rules);
-      setSuggestions(bundle.suggestions);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [reloadKey]);
+  function reload() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.rules({}) });
+  }
 
   const latest = useMemo(() => {
     if (!rules) return [] as Rule[];
@@ -70,25 +59,22 @@ export default function RuleBookPage() {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [rules]);
 
-  useEffect(() => {
-    if (!latest.length) return;
-    let cancelled = false;
-    void Promise.all(
-      latest.map((r) =>
-        apiClient
-          .POST("/api/v1/rules/{rule_id}/backtest", { params: { path: { rule_id: r.rule_id }, query: { version: r.version } } })
-          .then((res) => [r.rule_id, res.data] as const),
-      ),
-    ).then((results) => {
-      if (cancelled) return;
+  const { data: affected = {} } = useQuery({
+    queryKey: ["rules", "affected", latest.map((r) => `${r.rule_id}:${r.version}`)],
+    queryFn: async () => {
+      const results = await Promise.all(
+        latest.map((r) =>
+          apiClient
+            .POST("/api/v1/rules/{rule_id}/backtest", { params: { path: { rule_id: r.rule_id }, query: { version: r.version } } })
+            .then((res) => [r.rule_id, res.data] as const),
+        ),
+      );
       const map: Record<string, BacktestOut> = {};
-      for (const [id, data] of results) if (data) map[id] = data;
-      setAffected(map);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [latest]);
+      for (const [id, d] of results) if (d) map[id] = d;
+      return map;
+    },
+    enabled: latest.length > 0,
+  });
 
   async function createRule(payload: RuleSubmitPayload) {
     setSubmitting(true);

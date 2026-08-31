@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { use } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCheck, Archive, GitBranchPlus } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, humanizeSnakeCase, formatPercent } from "@/lib/format";
+import { queryKeys } from "@/lib/query-keys";
 
 type Rule = components["schemas"]["Rule"];
 type BacktestOut = components["schemas"]["BacktestOut"];
@@ -21,44 +23,34 @@ interface DeductionDraft {
 export default function RuleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const [versions, setVersions] = useState<Rule[] | null>(null);
-  const [backtest, setBacktest] = useState<BacktestOut | null>(null);
+  const queryClient = useQueryClient();
   const [retiring, setRetiring] = useState(false);
   const [draftingVersion, setDraftingVersion] = useState(false);
   const [versionDeductions, setVersionDeductions] = useState<DeductionDraft[]>([]);
   const [submittingVersion, setSubmittingVersion] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      const { data } = await apiClient.GET("/api/v1/rules/{rule_id}/versions", {
-        params: { path: { rule_id: id } },
-      });
-      if (cancelled) return;
-      setVersions(data ?? null);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  const { data: versions } = useQuery({
+    queryKey: queryKeys.ruleVersions(id),
+    queryFn: async () => (await apiClient.GET("/api/v1/rules/{rule_id}/versions", { params: { path: { rule_id: id } } })).data ?? null,
+  });
 
   const latest = versions?.slice().sort((a, b) => b.version - a.version)[0] ?? null;
 
-  useEffect(() => {
-    if (!latest) return;
-    let cancelled = false;
-    void apiClient
-      .POST("/api/v1/rules/{rule_id}/backtest", {
-        params: { path: { rule_id: id }, query: { version: latest.version } },
-      })
-      .then((res) => {
-        if (!cancelled) setBacktest(res.data ?? null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id, latest]);
+  const { data: backtest } = useQuery({
+    queryKey: queryKeys.ruleBacktest(id, latest?.version ?? 0),
+    queryFn: async () =>
+      (
+        await apiClient.POST("/api/v1/rules/{rule_id}/backtest", {
+          params: { path: { rule_id: id }, query: { version: latest!.version } },
+        })
+      ).data ?? null,
+    enabled: !!latest,
+  });
+
+  function reload() {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.ruleVersions(id) });
+    void queryClient.invalidateQueries({ queryKey: ["rules"] });
+  }
 
   if (!versions || !latest) return <div className="fc-card h-64 animate-pulse" aria-hidden />;
 
@@ -70,6 +62,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
       params: { path: { rule_id: id }, query: { version: latest.version } },
       body: { reason: reason.trim() },
     });
+    reload();
     router.refresh();
   }
 
@@ -83,6 +76,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
       body: { reason: reason.trim() },
     });
     setRetiring(false);
+    reload();
     router.refresh();
   }
 
@@ -120,6 +114,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
     setSubmittingVersion(false);
     if (!data) return;
     setDraftingVersion(false);
+    reload();
     router.refresh();
   }
 

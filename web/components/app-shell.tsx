@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   TriangleAlert,
@@ -20,6 +21,31 @@ import {
 import { useRun } from "@/lib/run-context";
 import { formatDurationMs, formatRunTimestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { queryKeys } from "@/lib/query-keys";
+import { fetchHomeBundle } from "@/app/page";
+import { fetchSourcesBundle } from "@/app/sources/page";
+import { fetchRecordsBundle } from "@/app/records/page";
+import { fetchRulesAndSuggestions } from "@/app/rules/page";
+import { fetchActivityBundle } from "@/app/activity/page";
+import { fetchAuditBundle } from "@/app/audit/page";
+import { fetchEvalBundle } from "@/app/eval/page";
+import { fetchCashBridge } from "@/app/cash/page";
+
+// A prefetch per nav item, keyed the same as the screen's own useQuery so a
+// hover primes the exact cache entry the click will read — "once a screen
+// has loaded it never shows a spinner again" only holds if the prefetch key
+// matches byte-for-byte.
+const PREFETCH: Record<string, (runId: string) => { queryKey: readonly unknown[]; queryFn: () => Promise<unknown> } | null> = {
+  "/": (runId) => ({ queryKey: queryKeys.homeHistory(runId), queryFn: () => fetchHomeBundle(runId) }),
+  "/exceptions": () => null, // ExceptionsTable/TriageQueue key off filters this shell doesn't know
+  "/rules": () => ({ queryKey: queryKeys.rules({}), queryFn: fetchRulesAndSuggestions }),
+  "/activity": (runId) => ({ queryKey: queryKeys.activityPage(runId), queryFn: () => fetchActivityBundle(runId) }),
+  "/eval": (runId) => ({ queryKey: queryKeys.evalBundle(runId), queryFn: () => fetchEvalBundle(runId) }),
+  "/cash": (runId) => ({ queryKey: queryKeys.cashBridge(runId), queryFn: () => fetchCashBridge(runId) }),
+  "/audit": (runId) => ({ queryKey: queryKeys.auditPage(runId), queryFn: () => fetchAuditBundle(runId) }),
+  "/sources": (runId) => ({ queryKey: queryKeys.sources(runId), queryFn: () => fetchSourcesBundle(runId) }),
+  "/records": (runId) => ({ queryKey: queryKeys.records(runId), queryFn: () => fetchRecordsBundle(runId) }),
+};
 
 const WORKSPACE_NAV = [
   { href: "/", label: "Reconcile", icon: ArrowLeftRight },
@@ -42,16 +68,19 @@ function NavItem({
   icon: Icon,
   active,
   badge,
+  onHover,
 }: {
   href: string;
   label: string;
   icon: React.ComponentType<{ width: number; height: number }>;
   active: boolean;
   badge?: number;
+  onHover?: () => void;
 }) {
   return (
     <Link
       href={href}
+      onMouseEnter={onHover}
       className={cn(
         "flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[13px]",
         active ? "bg-primary-tint font-semibold text-primary-active-text" : "font-medium text-nav-inactive-text hover:bg-neutral-bg",
@@ -71,6 +100,15 @@ function NavItem({
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { summary, loading, error } = useRun();
+  const queryClient = useQueryClient();
+  const runId = summary?.run.run_id;
+
+  function prefetch(href: string) {
+    if (!runId) return;
+    const entry = PREFETCH[href]?.(runId);
+    if (!entry) return;
+    void queryClient.prefetchQuery(entry);
+  }
 
   return (
     <div className="flex min-h-screen bg-background text-text-heading">
@@ -97,6 +135,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               badge={
                 item.badgeKey && summary ? summary.escalated_count + summary.monitor_count : undefined
               }
+              onHover={() => prefetch(item.href)}
             />
           ))}
         </div>
@@ -109,6 +148,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <NavItem
               key={item.href}
               href={item.href}
+              onHover={() => prefetch(item.href)}
               label={item.label}
               icon={item.icon}
               active={pathname === item.href || pathname.startsWith(item.href + "/")}

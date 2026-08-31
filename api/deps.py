@@ -355,7 +355,17 @@ async def persist_llm_calls(
     # row. Inserting both is what made twenty-two sql_narrate rows out of
     # eleven calls, half of them with an empty prompt_hash, and doubled the
     # apparent cost of every ask.
-    for record in buffer.drain():
+    records = list(buffer.drain())
+    if not records:
+        return
+    # A single multi-row INSERT ... ON CONFLICT cannot affect the same row
+    # twice, so the call/confirm pair sharing a call_id (see above) has to be
+    # collapsed here rather than left for Postgres to upsert twice: keep the
+    # first record's full row (it carries prompt_hash and token counts) and
+    # let a later record for the same call_id only override verified/outcome,
+    # matching what the old row-by-row upsert did.
+    merged: dict[str, dict] = {}
+    for record in records:
         values = dict(
             call_id=record.call_id,
             tenant_id=record.tenant_id or tenant_id,
@@ -374,17 +384,22 @@ async def persist_llm_calls(
             outcome=record.outcome,
             verified=record.verified,
         )
-        await session.execute(
-            pg_insert(LLMCall)
-            .values(**values)
-            .on_conflict_do_update(
-                index_elements=[LLMCall.call_id],
-                # Only what the downstream check can change. prompt_hash and the
-                # token counts stay as the original call recorded them — the
-                # confirm record carries neither.
-                set_={"verified": record.verified, "outcome": record.outcome},
-            )
+        existing = merged.get(record.call_id)
+        if existing is None:
+            merged[record.call_id] = values
+        else:
+            existing["verified"] = values["verified"]
+            existing["outcome"] = values["outcome"]
+    stmt = pg_insert(LLMCall).values(list(merged.values()))
+    await session.execute(
+        stmt.on_conflict_do_update(
+            index_elements=[LLMCall.call_id],
+            # Only what the downstream check can change. prompt_hash and the
+            # token counts stay as the original call recorded them — the
+            # confirm record carries neither.
+            set_={"verified": stmt.excluded.verified, "outcome": stmt.excluded.outcome},
         )
+    )
     await session.flush()
 
 

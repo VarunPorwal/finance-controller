@@ -1,39 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatCard } from "@/components/ui/stat-card";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type CashBridgeOut = components["schemas"]["CashBridgeOut"];
+
+export async function fetchCashBridge(runId: string): Promise<CashBridgeOut | null> {
+  return (await apiClient.GET("/api/v1/cash/bridge", { params: { query: { run_id: runId } } })).data ?? null;
+}
 
 export default function CashPage() {
   const { summary } = useRun();
   const runId = summary?.run.run_id;
-  const [bridge, setBridge] = useState<CashBridgeOut | null | undefined>(() =>
-    cacheGet<CashBridgeOut>(runId ? `cash:${runId}` : null) ?? undefined,
-  );
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const seeded = cacheGet<CashBridgeOut>(`cash:${runId}`);
-    if (seeded) setBridge(seeded);
-    apiClient
-      .GET("/api/v1/cash/bridge", { params: { query: { run_id: runId } } })
-      .then((res) => {
-        if (cancelled) return;
-        const data = res.data ?? null;
-        if (data) cacheSet(`cash:${runId}`, data);
-        setBridge(data);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+  const { data: bridgeData, isFetched } = useQuery({
+    queryKey: queryKeys.cashBridge(runId),
+    queryFn: () => fetchCashBridge(runId!),
+    enabled: !!runId,
+  });
+  const bridge = !runId || isFetched ? (bridgeData ?? null) : undefined;
 
   return (
     <div>

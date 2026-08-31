@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
+import { queryKeys } from "@/lib/query-keys";
 
 type BacktestOut = components["schemas"]["BacktestOut"];
 
@@ -24,30 +26,21 @@ export function BacktestDialog({
   onActivated: () => void;
   onClose: () => void;
 }) {
-  const [result, setResult] = useState<BacktestOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [activating, setActivating] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
+  const { data: result, error: queryError } = useQuery({
+    queryKey: queryKeys.ruleBacktest(ruleId, version),
+    queryFn: async () => {
       const { data, error: fetchError } = await apiClient.POST(
         "/api/v1/rules/{rule_id}/backtest",
         { params: { path: { rule_id: ruleId }, query: { version } } },
       );
-      if (cancelled) return;
-      if (fetchError || !data) {
-        setError("back-test failed to run");
-        return;
-      }
-      setResult(data);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [ruleId, version]);
+      if (fetchError || !data) throw new Error("back-test failed to run");
+      return data;
+    },
+  });
+  const error = queryError ? "back-test failed to run" : null;
 
   async function activate() {
     if (!reason.trim()) return;

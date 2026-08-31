@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type EventCount = components["schemas"]["EventCountOut"];
 type AuditEvent = components["schemas"]["AuditEventOut"];
@@ -14,47 +14,30 @@ type RecordsBundle = { counts: EventCount | null; history: AuditEvent[]; events:
 
 const SOURCES = ["razorpay", "bank", "tally"] as const;
 
+export async function fetchRecordsBundle(runId: string): Promise<RecordsBundle> {
+  const [countRes, auditRes, eventsRes] = await Promise.all([
+    apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
+    apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
+    apiClient.GET("/api/v1/events", { params: { query: { run_id: runId, limit: 30 } } }),
+  ]);
+  return {
+    counts: countRes.data ?? null,
+    history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
+    events: eventsRes.data?.items ?? [],
+  };
+}
+
 export default function RecordsPage() {
   const { summary } = useRun();
   const runId = summary?.run.run_id;
-  const cacheKey = `records:${runId ?? "none"}`;
-  const cached = cacheGet<RecordsBundle>(cacheKey);
-  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
-  const [history, setHistory] = useState<AuditEvent[]>(cached?.history ?? []);
-  const [events, setEvents] = useState<TransactionEvent[]>(cached?.events ?? []);
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const key = `records:${runId}`;
-    const seeded = cacheGet<RecordsBundle>(key);
-    if (seeded) {
-      setCounts(seeded.counts);
-      setHistory(seeded.history);
-      setEvents(seeded.events);
-    }
-    async function load() {
-      const [countRes, auditRes, eventsRes] = await Promise.all([
-        apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
-        apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
-        apiClient.GET("/api/v1/events", { params: { query: { run_id: runId, limit: 30 } } }),
-      ]);
-      if (cancelled) return;
-      const bundle: RecordsBundle = {
-        counts: countRes.data ?? null,
-        history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
-        events: eventsRes.data?.items ?? [],
-      };
-      cacheSet(key, bundle);
-      setCounts(bundle.counts);
-      setHistory(bundle.history);
-      setEvents(bundle.events);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+  const { data } = useQuery({
+    queryKey: queryKeys.records(runId),
+    queryFn: () => fetchRecordsBundle(runId!),
+    enabled: !!runId,
+  });
+  const counts = data?.counts ?? null;
+  const history = data?.history ?? [];
+  const events = data?.events ?? [];
 
   const lastImportBySource = new Map(history.map((h) => [h.action.replace("ingest.", ""), h]));
 

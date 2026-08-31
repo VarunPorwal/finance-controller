@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { StatCard } from "@/components/ui/stat-card";
 import { RunProgressStrip } from "@/components/run-progress-strip";
 import { formatPaise, humanizeSnakeCase } from "@/lib/format";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type AuditEvent = components["schemas"]["AuditEventOut"];
 type Rule = components["schemas"]["Rule"];
@@ -35,78 +36,56 @@ const ACTION_COLOR: Record<string, string> = {
   "rule.backtest": "var(--primary)",
 };
 
+export async function fetchActivityBundle(runId: string | undefined): Promise<ActivityBundle> {
+  const [runsRes, rulesRes, auditRes, llmRes, narrativeRes] = await Promise.all([
+    apiClient.GET("/api/v1/runs", { params: { query: { status: "complete", limit: 50 } } }),
+    apiClient.GET("/api/v1/rules", { params: { query: { status: "active" } } }),
+    apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 50 } } }),
+    apiClient.GET("/api/v1/llm/calls", { params: { query: { run_id: runId, limit: 20 } } }),
+    runId
+      ? apiClient.GET("/api/v1/agent/narrative/{run_id}", { params: { path: { run_id: runId } } })
+      : Promise.resolve({ data: undefined }),
+  ]);
+  const runsList = runsRes.data?.items ?? [];
+  const today = new Date().toDateString();
+  const withRuntime = runsList.filter((r) => r.runtime_ms != null);
+  const activeRules: Rule[] = rulesRes.data ?? [];
+  return {
+    runsToday: runsList.filter((r) => new Date(r.started_at).toDateString() === today).length,
+    activeRuleCount: new Set(activeRules.map((r) => r.rule_id)).size,
+    avgRuntimeMs: withRuntime.length
+      ? withRuntime.reduce((s, r) => s + (r.runtime_ms ?? 0), 0) / withRuntime.length
+      : null,
+    log: auditRes.data?.items ?? [],
+    llmCalls: llmRes.data?.items ?? [],
+    runs: runsList,
+    narrative: narrativeRes.data ?? null,
+  };
+}
+
 export default function ControllerActivityPage() {
   const { summary } = useRun();
   const runId = summary?.run.run_id;
-  const cacheKey = `activity:${runId ?? "none"}`;
-  const cached = cacheGet<ActivityBundle>(cacheKey);
-  const [runsToday, setRunsToday] = useState<number | null>(cached?.runsToday ?? null);
-  const [activeRuleCount, setActiveRuleCount] = useState<number | null>(cached?.activeRuleCount ?? null);
-  const [avgRuntimeMs, setAvgRuntimeMs] = useState<number | null>(cached?.avgRuntimeMs ?? null);
-  const [log, setLog] = useState<AuditEvent[]>(cached?.log ?? []);
-  const [llmCalls, setLlmCalls] = useState<LLMCall[]>(cached?.llmCalls ?? []);
-  const [runs, setRuns] = useState<RunOut[]>(cached?.runs ?? []);
-  const [narrative, setNarrative] = useState<NarrativeOut | null>(cached?.narrative ?? null);
-  const [fromRunId, setFromRunId] = useState(cached?.runs?.[1]?.run_id ?? "");
-  const [toRunId, setToRunId] = useState(cached?.runs?.[0]?.run_id ?? "");
+  const { data } = useQuery({
+    queryKey: queryKeys.activityPage(runId),
+    queryFn: () => fetchActivityBundle(runId),
+  });
+  const runsToday = data?.runsToday ?? null;
+  const activeRuleCount = data?.activeRuleCount ?? null;
+  const avgRuntimeMs = data?.avgRuntimeMs ?? null;
+  const log = data?.log ?? [];
+  const llmCalls = data?.llmCalls ?? [];
+  const runs = data?.runs ?? [];
+  const narrative = data?.narrative ?? null;
+  const [fromRunIdOverride, setFromRunIdOverride] = useState<string | null>(null);
+  const [toRunIdOverride, setToRunIdOverride] = useState<string | null>(null);
+  const fromRunId = fromRunIdOverride ?? runs[1]?.run_id ?? "";
+  const toRunId = toRunIdOverride ?? runs[0]?.run_id ?? "";
+  const setFromRunId = setFromRunIdOverride;
+  const setToRunId = setToRunIdOverride;
   const [diff, setDiff] = useState<ReplayDiff | null>(null);
   const [diffing, setDiffing] = useState(false);
   const [replaying, setReplaying] = useState(false);
-
-  function applyBundle(b: ActivityBundle) {
-    setRunsToday(b.runsToday);
-    setActiveRuleCount(b.activeRuleCount);
-    setAvgRuntimeMs(b.avgRuntimeMs);
-    setLog(b.log);
-    setLlmCalls(b.llmCalls);
-    setRuns(b.runs);
-    setNarrative(b.narrative);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    const key = `activity:${runId ?? "none"}`;
-    const seeded = cacheGet<ActivityBundle>(key);
-    if (seeded) applyBundle(seeded);
-    async function load() {
-      const [runsRes, rulesRes, auditRes, llmRes, narrativeRes] = await Promise.all([
-        apiClient.GET("/api/v1/runs", { params: { query: { status: "complete", limit: 50 } } }),
-        apiClient.GET("/api/v1/rules", { params: { query: { status: "active" } } }),
-        apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 50 } } }),
-        apiClient.GET("/api/v1/llm/calls", { params: { query: { run_id: runId, limit: 20 } } }),
-        runId
-          ? apiClient.GET("/api/v1/agent/narrative/{run_id}", { params: { path: { run_id: runId } } })
-          : Promise.resolve({ data: undefined }),
-      ]);
-      if (cancelled) return;
-      const runsList = runsRes.data?.items ?? [];
-      const today = new Date().toDateString();
-      const withRuntime = runsList.filter((r) => r.runtime_ms != null);
-      const activeRules: Rule[] = rulesRes.data ?? [];
-      const bundle: ActivityBundle = {
-        runsToday: runsList.filter((r) => new Date(r.started_at).toDateString() === today).length,
-        activeRuleCount: new Set(activeRules.map((r) => r.rule_id)).size,
-        avgRuntimeMs: withRuntime.length
-          ? withRuntime.reduce((s, r) => s + (r.runtime_ms ?? 0), 0) / withRuntime.length
-          : null,
-        log: auditRes.data?.items ?? [],
-        llmCalls: llmRes.data?.items ?? [],
-        runs: runsList,
-        narrative: narrativeRes.data ?? null,
-      };
-      cacheSet(key, bundle);
-      applyBundle(bundle);
-      if (runsList.length >= 2 && !fromRunId && !toRunId) {
-        setFromRunId(runsList[1].run_id);
-        setToRunId(runsList[0].run_id);
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
 
   async function runDiff() {
     if (!fromRunId || !toRunId) return;

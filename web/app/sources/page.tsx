@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Landmark, Database, CreditCard } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { IngestPanel } from "@/components/ingest-panel";
 import { StatusPill } from "@/components/ui/status-pill";
-import { cacheGet, cacheSet } from "@/lib/page-cache";
+import { queryKeys } from "@/lib/query-keys";
 
 type EventCount = components["schemas"]["EventCountOut"];
 type AuditEvent = components["schemas"]["AuditEventOut"];
@@ -18,41 +18,27 @@ const CONNECTORS = [
   { key: "tally", name: "Tally", icon: Database, iconBg: "var(--success-bg)", iconColor: "var(--success)" },
 ];
 
+export async function fetchSourcesBundle(runId: string): Promise<SourcesBundle> {
+  const [countRes, auditRes] = await Promise.all([
+    apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
+    apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
+  ]);
+  return {
+    counts: countRes.data ?? null,
+    history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
+  };
+}
+
 export default function DataSourcesPage() {
   const { summary, refresh } = useRun();
   const runId = summary?.run.run_id;
-  const cached = cacheGet<SourcesBundle>(`sources:${runId ?? "none"}`);
-  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
-  const [history, setHistory] = useState<AuditEvent[]>(cached?.history ?? []);
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const key = `sources:${runId}`;
-    const seeded = cacheGet<SourcesBundle>(key);
-    if (seeded) {
-      setCounts(seeded.counts);
-      setHistory(seeded.history);
-    }
-    async function load() {
-      const [countRes, auditRes] = await Promise.all([
-        apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
-        apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
-      ]);
-      if (cancelled) return;
-      const bundle: SourcesBundle = {
-        counts: countRes.data ?? null,
-        history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
-      };
-      cacheSet(key, bundle);
-      setCounts(bundle.counts);
-      setHistory(bundle.history);
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [runId]);
+  const { data } = useQuery({
+    queryKey: queryKeys.sources(runId),
+    queryFn: () => fetchSourcesBundle(runId!),
+    enabled: !!runId,
+  });
+  const counts = data?.counts ?? null;
+  const history = data?.history ?? [];
 
   return (
     <div>
