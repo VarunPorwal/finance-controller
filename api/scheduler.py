@@ -77,6 +77,11 @@ _DEADLINE_HORIZON = timedelta(hours=48)
 #: The digest and the deadline sweep both mean "still in the queue".
 _OPEN_STATUSES = ("open", "monitoring", "snoozed", "escalated")
 
+#: Statuses the recheck job acts on. Both are "come back to this later"
+#: written by different authors — the pipeline's tiering and a human's
+#: snooze — and both set recheck_at.
+_RECHECKABLE_STATUSES = ("monitoring", "snoozed")
+
 _SCHEDULER_ROLE = "system"
 
 
@@ -99,12 +104,20 @@ async def recheck_job(cfg: Config) -> None:
     now = datetime.now(UTC)
     for tenant_id in await _active_tenant_ids():
         async with scoped_session(tenant_id, _SCHEDULER_ROLE) as session:
+            # Both statuses that carry a recheck_at, not just one. "monitoring"
+            # is the pipeline's own follow-up; "snoozed" is a human saying "not
+            # until Friday". Selecting only the former meant a snooze was
+            # permanent — the exception left the queue and nothing ever brought
+            # it back — and since the corpus produces no monitor-tier rows, this
+            # job had selected zero rows on every tick since it was built.
             due = await session.scalars(
                 select(ExceptionRow).where(
-                    ExceptionRow.status == "monitoring", ExceptionRow.recheck_at <= now
+                    ExceptionRow.status.in_(_RECHECKABLE_STATUSES),
+                    ExceptionRow.recheck_at <= now,
                 )
             )
             for exc in due.all():
+                was_snoozed = exc.status == "snoozed"
                 now_matched = await session.scalar(
                     select(Match.match_id).where(Match.event_ids.overlap(exc.event_ids)).limit(1)
                 )
@@ -121,6 +134,26 @@ async def recheck_job(cfg: Config) -> None:
                         subject_type="exception",
                         subject_id=exc.exception_id,
                         payload={"match_id": now_matched},
+                        created_at=now,
+                        run_id=exc.run_id,
+                    )
+                    continue
+
+                if was_snoozed:
+                    # The snooze expired and the item is still unresolved, so it
+                    # goes back to the human who deferred it. A deferral is not a
+                    # failed recheck: counting it toward max_rechecks would let
+                    # three snoozes escalate an exception nobody re-examined.
+                    exc.status = "open"
+                    exc.recheck_at = None
+                    await append_audit(
+                        session,
+                        tenant_id=tenant_id,
+                        actor="scheduler",
+                        action="exception.snooze_expired",
+                        subject_type="exception",
+                        subject_id=exc.exception_id,
+                        payload={"returned_to": "open"},
                         created_at=now,
                         run_id=exc.run_id,
                     )

@@ -21,7 +21,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Final
+from typing import Final, NamedTuple
 
 from fc.cash.bridge import CashBridge, compute_cash_bridge
 from fc.config import Config, load_config
@@ -34,7 +34,7 @@ from fc.exceptions.recommend import recommended_action
 from fc.exceptions.tier import tier_for
 from fc.ingest.aliases import AliasTable
 from fc.matching.cascade import CascadeResult, run_cascade
-from fc.models.exception_ import Cluster, Exception_
+from fc.models.exception_ import Cluster, Exception_, ExceptionStatus, ResolvedBy
 from fc.models.ids import deterministic_factory
 from fc.models.money import fmt_inr
 from fc.models.rule import Rule
@@ -81,6 +81,48 @@ class PipelineResult:
     exceptions: tuple[Exception_, ...]
     clusters: tuple[Cluster, ...]
     cash_bridge: CashBridge
+
+
+class _Lifecycle(NamedTuple):
+    status: ExceptionStatus
+    resolved_by: ResolvedBy | None = None
+    resolved_at: datetime | None = None
+    resolution_reason: str | None = None
+
+
+def _lifecycle_for(tier: str, *, created_at: datetime) -> _Lifecycle:
+    """The status a freshly tiered exception is born in.
+
+    §6.8's tier is a decision about who acts, and the status has to say the
+    same thing or nothing downstream can act on it. Both mismatches were live:
+
+    * ``monitor`` means "the system will look again on ``recheck_at``", but the
+      row was written ``open``, and the recheck job selects
+      ``status == 'monitoring'``. It had therefore selected nothing on every
+      tick since it was built.
+
+    * ``auto`` means the pipeline resolved it — an AUTO_SAFE category at or
+      above ``auto_threshold``, with the NEVER_AUTO gate already passed. The row
+      was written ``open`` and then hidden from the queue by the UI under the
+      heading "Already handled", so eight exceptions were neither surfaced to a
+      human nor recorded as closed. ``resolved_by='system'`` is what makes
+      "already handled" true rather than a caption.
+
+    ``resolved_at`` uses the run's ``created_at``, not the clock, so the same
+    seed still produces byte-identical exceptions (hard rule 9).
+    """
+    if tier == "monitor":
+        return _Lifecycle(status="monitoring")
+    if tier == "auto":
+        return _Lifecycle(
+            status="resolved",
+            resolved_by="system",
+            resolved_at=created_at,
+            resolution_reason=(
+                "auto-resolved: category is auto-safe and confidence met the threshold"
+            ),
+        )
+    return _Lifecycle(status="open")
 
 
 def run_pipeline(
@@ -161,6 +203,7 @@ def run_pipeline(
     exceptions: list[Exception_] = []
     for index, item in enumerate(classified):
         tier_decision = tier_decisions[index]
+        lifecycle = _lifecycle_for(tier_decision.tier, created_at=created_at)
         consequence, deadline = consequences[index]
         exceptions.append(
             Exception_(
@@ -189,6 +232,10 @@ def run_pipeline(
                 recheck_at=tier_decision.recheck_at,
                 signature=item.signature,
                 created_at=created_at,
+                status=lifecycle.status,
+                resolved_by=lifecycle.resolved_by,
+                resolved_at=lifecycle.resolved_at,
+                resolution_reason=lifecycle.resolution_reason,
             )
         )
 
