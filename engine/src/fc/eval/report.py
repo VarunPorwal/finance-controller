@@ -136,6 +136,14 @@ class EvalReport:
     precision: Decimal
     recall: Decimal
     stage_precision: Mapping[str, Decimal]
+    #: Of every true pair in the corpus, what fraction did this stage help
+    #: recover correctly — same numerator (`hits`) as ``stage_precision``,
+    #: but divided by the global ``true_pairs`` rather than the stage's own
+    #: predicted total, so it's comparable to the top-level ``recall`` above.
+    #: Stages aren't mutually exclusive partitions of the true pairs (a
+    #: multi-leg group counts under every stage that touched it, same as
+    #: ``stage_precision``), so these do not sum to 100%.
+    stage_recall: Mapping[str, Decimal]
     match_rate: Decimal
     false_auto_resolutions: int
     #: Events ground truth labels NEVER_AUTO that are sitting inside an
@@ -211,6 +219,8 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
     }
     gt_label_of = {event_id: corpus.label.get(key) for event_id, key in event_source_key.items()}
 
+    true_pairs = _true_pair_count(corpus, group_of)
+
     predicted = 0
     correct = 0
     by_stage: dict[str, list[int]] = {}
@@ -235,7 +245,6 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
             tally[0] += hits
             tally[1] += total
 
-    true_pairs = _true_pair_count(corpus, group_of)
     matched_events = len(result.matched_event_ids)
 
     ledger_barren = set(result.ledger_refs.without_reference)
@@ -278,6 +287,9 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
         recall=_ratio(correct, true_pairs),
         stage_precision={
             stage: _ratio(hits, total) for stage, (hits, total) in sorted(by_stage.items())
+        },
+        stage_recall={
+            stage: _ratio(hits, true_pairs) for stage, (hits, _total) in sorted(by_stage.items())
         },
         match_rate=_ratio(matched_events, len(corpus.events)),
         false_auto_resolutions=_false_auto_resolutions(result, group_of),
@@ -549,7 +561,12 @@ def render(report: EvalReport) -> str:
     lines.append("Cascade")
     for stage, count in report.cascade.stage_counts.items():
         precision = report.stage_precision.get(stage)
-        suffix = f"  (pairwise precision {_pct(precision)})" if precision is not None else ""
+        recall = report.stage_recall.get(stage)
+        suffix = (
+            f"  (pairwise precision {_pct(precision)}, recall {_pct(recall)})"
+            if precision is not None and recall is not None
+            else ""
+        )
         row(f"stage {stage}", f"{count} matches{suffix}")
     for stage, abstained in report.cascade.abstentions.items():
         if abstained:

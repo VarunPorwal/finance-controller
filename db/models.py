@@ -434,6 +434,14 @@ class EvalResult(Base):
     coverage_curve: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     by_category: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     by_stage: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    #: §12.5 GateResult list — {name, passed, actual, threshold} — added
+    #: 31 Aug 2026 (migration 0003) for the Evaluation screen's PASS/FAIL cards.
+    gates: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #: EvalReport.failures — the honest "what we got wrong" list, added
+    #: alongside gates in the same migration.
+    failures: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
     computed_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=_NOW
     )

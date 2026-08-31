@@ -34,6 +34,8 @@ class EvalResultOut(BaseModel):
     abstention_pct: Decimal | None
     false_auto_resolutions: int
     auto_threshold: Decimal
+    gates: list[dict[str, Any]]
+    failures: list[dict[str, Any]]
     computed_at: datetime
 
 
@@ -76,6 +78,8 @@ async def get_eval_result(
         abstention_pct=row.abstention_pct,
         false_auto_resolutions=row.false_auto_resolutions,
         auto_threshold=row.auto_threshold,
+        gates=list(row.gates),
+        failures=list(row.failures),
         computed_at=row.computed_at,
     )
 

@@ -64,14 +64,14 @@ export function BacktestDialog({
     <div
       role="dialog"
       aria-label={`Back-test for ${ruleName}`}
-      className="border-rzp-blue bg-ink-800 fixed inset-0 z-50 m-auto flex h-fit max-h-[85vh] w-[min(560px,92vw)] flex-col gap-4 overflow-y-auto rounded-lg border p-5 shadow-2xl"
+      className="border-primary bg-card fixed inset-0 z-50 m-auto flex h-fit max-h-[85vh] w-[min(560px,92vw)] flex-col gap-4 overflow-y-auto rounded-lg border p-5 shadow-2xl"
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="font-heading text-base font-semibold text-paper-100">
+          <h2 className="text-base font-semibold text-text-heading">
             Back-test: {ruleName}
           </h2>
-          <p className="text-paper-500 text-xs">
+          <p className="text-text-muted text-xs">
             {ruleId} v{version} — run against resolved/written-off exceptions before this rule can
             activate.
           </p>
@@ -79,47 +79,47 @@ export function BacktestDialog({
         <button
           type="button"
           onClick={onClose}
-          className="text-paper-500 hover:text-paper-100 text-sm"
+          className="text-text-muted hover:text-text-heading text-sm"
           aria-label="Close"
         >
           ✕
         </button>
       </div>
 
-      {error && <p className="text-sig-amber text-sm">{error}</p>}
+      {error && <p className="text-amber-text text-sm">{error}</p>}
       {!result && !error && (
-        <div className="border-rule bg-ink-900 h-32 animate-pulse rounded-lg border" aria-hidden />
+        <div className="border-border bg-background h-32 animate-pulse rounded-lg border" aria-hidden />
       )}
 
       {result && (
         <>
-          <p className="text-paper-300 text-sm">
+          <p className="text-text-body text-sm">
             {result.cases_considered} historical cases considered, {result.unverified} unverified.
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <Bucket
               label="Would explain"
-              tone="text-sig-green"
+              tone="text-success"
               count={result.would_explain.count}
               totalPaise={result.would_explain.total_paise}
             />
             <Bucket
               label="Would wrongly close"
-              tone="text-sig-red"
+              tone="text-error"
               count={result.would_wrongly_close.count}
               totalPaise={result.would_wrongly_close.total_paise}
             />
             <Bucket
               label="Would partially explain"
-              tone="text-sig-amber"
+              tone="text-amber-text"
               count={result.would_partially_explain.count}
               totalPaise={result.would_partially_explain.total_paise}
             />
           </div>
-          <p className="text-paper-100 text-sm font-medium">{result.net_recommendation}</p>
+          <p className="text-text-heading text-sm font-medium">{result.net_recommendation}</p>
 
-          <div className="border-rule border-t pt-3">
-            <label htmlFor="activate-reason" className="text-paper-300 mb-1 block text-xs font-medium">
+          <div className="border-border border-t pt-3">
+            <label htmlFor="activate-reason" className="text-text-body mb-1 block text-xs font-medium">
               Reason to activate (required)
             </label>
             <textarea
@@ -128,21 +128,21 @@ export function BacktestDialog({
               onChange={(e) => setReason(e.target.value)}
               rows={2}
               placeholder="Back-test shows zero wrongly-closed cases against 30 days of history."
-              className="border-rule bg-ink-900 text-paper-100 placeholder:text-paper-500 w-full resize-none rounded-md border p-2 text-sm"
+              className="border-border bg-background text-text-heading placeholder:text-text-muted w-full resize-none rounded-md border p-2 text-sm"
             />
             <div className="mt-3 flex items-center gap-2">
               <button
                 type="button"
                 disabled={!reason.trim() || activating}
                 onClick={activate}
-                className="bg-rzp-blue hover:bg-rzp-blue/90 rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="bg-primary hover:bg-primary/90 rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {activating ? "Activating…" : "Activate rule"}
               </button>
               <button
                 type="button"
                 onClick={onClose}
-                className="border-rule text-paper-300 hover:bg-ink-700 rounded-md border px-4 py-2 text-sm"
+                className="border-border text-text-body hover:bg-neutral-bg rounded-md border px-4 py-2 text-sm"
               >
                 Leave as draft
               </button>
@@ -166,10 +166,10 @@ function Bucket({
   totalPaise: number;
 }) {
   return (
-    <div className="border-rule bg-ink-900 rounded-md border p-2">
-      <p className="text-paper-500 text-xs">{label}</p>
+    <div className="border-border bg-background rounded-md border p-2">
+      <p className="text-text-muted text-xs">{label}</p>
       <p className={"fc-numeric text-sm font-semibold " + tone}>{count}</p>
-      <p className="fc-numeric text-paper-300 text-xs">{formatPaise(totalPaise)}</p>
+      <p className="fc-numeric text-text-body text-xs">{formatPaise(totalPaise)}</p>
     </div>
   );
 }

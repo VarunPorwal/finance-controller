@@ -167,7 +167,7 @@ export function TriageQueue({
 
   if (error) {
     return (
-      <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">
+      <div className="text-amber-text border-border bg-card rounded-lg border p-4 text-sm">
         {error}
       </div>
     );
@@ -175,7 +175,7 @@ export function TriageQueue({
   if (!exceptions) {
     return (
       <div
-        className="border-rule bg-ink-800 h-64 animate-pulse rounded-lg border"
+        className="border-border bg-card h-64 animate-pulse rounded-lg border"
         aria-hidden
       />
     );
@@ -184,7 +184,7 @@ export function TriageQueue({
   return (
     <section aria-label="Triage queue" className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <h2 className="font-heading text-paper-300 text-xs font-semibold uppercase tracking-wide">
+        <h2 className="text-text-body text-xs font-semibold uppercase tracking-wide">
           {gapFilterExceptionIds
             ? `Filtered to unexplained gap · ${needsYouRows.length}`
             : `Needs you · ${needsYouRows.length}`}
@@ -193,7 +193,7 @@ export function TriageQueue({
           <button
             type="button"
             onClick={onClearGapFilter}
-            className="text-rzp-blue text-xs font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue"
+            className="text-primary text-xs font-medium hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           >
             Clear filter
           </button>
@@ -202,7 +202,7 @@ export function TriageQueue({
 
       <ul className="flex flex-col gap-1">
         {needsYouRows.length === 0 && (
-          <li className="text-paper-500 border-rule bg-ink-800 rounded-lg border border-dashed p-4 text-center text-sm">
+          <li className="text-text-muted border-border bg-card rounded-lg border border-dashed p-4 text-center text-sm">
             Nothing needs you right now.
           </li>
         )}
@@ -223,7 +223,7 @@ export function TriageQueue({
 
       {!gapFilterExceptionIds && (
         <details className="mt-2">
-          <summary className="text-paper-500 hover:text-paper-300 cursor-pointer select-none text-xs font-medium">
+          <summary className="text-text-muted hover:text-text-body cursor-pointer select-none text-xs font-medium">
             Already handled · {handledCount}
           </summary>
           <ul className="mt-2 flex flex-col gap-1">
@@ -312,12 +312,12 @@ function QueueRowItem({
         onClick={onSelect}
         aria-pressed={selected}
         className={
-          "border-rule flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue " +
+          "border-border flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary " +
           (selected
-            ? "bg-rzp-deep border-rzp-blue"
+            ? "bg-primary border-primary"
             : highlighted
-              ? "bg-ink-700 border-rzp-blue/60"
-              : "bg-ink-800 hover:bg-ink-700")
+              ? "bg-neutral-bg border-primary/60"
+              : "bg-card hover:bg-neutral-bg")
         }
       >
         <span aria-hidden>{TIER_DOT[row.tier]}</span>
@@ -326,7 +326,7 @@ function QueueRowItem({
             <span
               className={
                 "truncate text-sm font-medium " +
-                (muted ? "text-paper-300" : "text-paper-100")
+                (muted ? "text-text-body" : "text-text-heading")
               }
             >
               {row.title}
@@ -340,7 +340,7 @@ function QueueRowItem({
               {formatPaise(row.amountPaise)}
             </span>
           </span>
-          <span className="text-paper-500 block text-xs">{row.subtitle}</span>
+          <span className="text-text-muted block text-xs">{row.subtitle}</span>
         </span>
       </button>
     </li>

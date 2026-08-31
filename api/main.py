@@ -36,6 +36,7 @@ from api.routers import (
     events,
     exceptions,
     ingest,
+    llm,
     matches,
     meta,
     rules,
@@ -121,6 +122,7 @@ app.include_router(rules.router, prefix="/api/v1")
 app.include_router(cash.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
+app.include_router(llm.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 
 

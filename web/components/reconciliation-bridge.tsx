@@ -2,22 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { apiClient, type components } from "@/lib/client";
-import { formatPaise } from "@/lib/format";
+import { formatPaiseWhole } from "@/lib/format";
 
 type CashBridge = components["schemas"]["CashBridgeOut"];
-type Segment = components["schemas"]["BridgeSegmentOut"];
 
 /**
- * PRD §13.4, the signature element. A finance person draws this by hand when
- * explaining a settlement: gross in, named deductions out, expected net,
- * what the bank actually credited, and the gap between the two. Every figure
- * here is `*_paise` off the wire (CashBridgeOut) — nothing is derived
- * client-side.
+ * design/README.md's Cash Bridge card: 4 segments (gross settled, deductions
+ * collapsed into one "fees/GST/TDS/reserve" block, credited to bank,
+ * unexplained gap), each with a 3px colour rule, an icon tile and a mono
+ * amount. Every figure is `*_paise` off `GET /cash/bridge` — nothing here is
+ * derived client-side except the deduction total, which is a plain sum of
+ * server-supplied integers, not a new financial computation.
  *
- * Hovering a deduction highlights its contributing events; clicking the
- * UNEXPLAINED row filters the queue to its exceptions. Both are lifted to
- * the parent via callbacks so the bridge and the queue share one source of
- * truth for "what's currently highlighted."
+ * Hovering the deductions segment highlights every event any deduction
+ * attributes to; clicking the gap filters the queue to its exceptions — the
+ * same two callbacks the exceptions screen wires into the triage queue.
  */
 export function ReconciliationBridge({
   runId,
@@ -35,12 +34,9 @@ export function ReconciliationBridge({
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const { data, error: fetchError } = await apiClient.GET(
-        "/api/v1/cash/bridge",
-        {
-          params: { query: { run_id: runId } },
-        },
-      );
+      const { data, error: fetchError } = await apiClient.GET("/api/v1/cash/bridge", {
+        params: { query: { run_id: runId } },
+      });
       if (cancelled) return;
       if (fetchError || !data) {
         setError("could not load the cash bridge");
@@ -55,161 +51,72 @@ export function ReconciliationBridge({
   }, [runId]);
 
   if (error) {
-    return (
-      <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">
-        {error}
-      </div>
-    );
+    return <div className="fc-card p-4 text-sm text-amber-text">{error}</div>;
   }
   if (!bridge) {
-    return (
-      <div
-        className="border-rule bg-ink-800 h-40 animate-pulse rounded-lg border"
-        aria-hidden
-      />
-    );
+    return <div className="fc-card h-[180px] animate-pulse" aria-hidden />;
   }
 
-  const scale = Math.max(Math.abs(bridge.gross_collected_paise), 1);
+  const deductionTotalPaise = bridge.deductions.reduce((sum, d) => sum + d.amount_paise, 0);
+  const deductionEventIds = bridge.deductions.flatMap((d) => d.event_ids);
+  const unexplainedSegment = bridge.segments.find((s) => s.label === "Unexplained");
   const gapNonZero = bridge.unexplained_paise !== 0;
-  const unexplainedSegment = bridge.segments.find(
-    (s: Segment) => s.label === "Unexplained",
-  );
 
-  return (
-    <section
-      aria-label="Reconciliation Bridge"
-      className="border-rule bg-ink-800 rounded-lg border p-5"
-    >
-      <h2 className="font-heading text-paper-300 mb-4 text-xs font-semibold uppercase tracking-wide">
-        Reconciliation Bridge
-      </h2>
-
-      <BridgeRow
-        label="Gross collected"
-        amountPaise={bridge.gross_collected_paise}
-        widthPct={100}
-        bold
-      />
-
-      <div className="border-rule my-2 border-l-2 pl-3">
-        {bridge.deductions.map((segment) => (
-          <BridgeRow
-            key={segment.label}
-            label={segment.label}
-            amountPaise={-segment.amount_paise}
-            widthPct={(Math.abs(segment.amount_paise) / scale) * 100}
-            onMouseEnter={() => onHoverSegment(segment.event_ids)}
-            onMouseLeave={() => onHoverSegment(null)}
-          />
-        ))}
-      </div>
-
-      <BridgeRow
-        label="Expected net"
-        amountPaise={bridge.expected_net_paise}
-        widthPct={100}
-        bold
-      />
-      <BridgeRow
-        label="vs. bank credited"
-        amountPaise={bridge.actual_bank_paise}
-        widthPct={(bridge.actual_bank_paise / scale) * 100}
-      />
-
-      <div className="border-rule mt-3 border-t pt-3">
-        <button
-          type="button"
-          disabled={!gapNonZero}
-          onClick={() => {
+  const segments = [
+    { key: "gross", color: "var(--primary)", iconBg: "var(--primary-tint)", amount: formatPaiseWhole(bridge.gross_collected_paise), caption: "Gross settled" },
+    { key: "fees", color: "var(--text-body)", iconBg: "var(--neutral-bg)", amount: `−${formatPaiseWhole(deductionTotalPaise)}`, caption: "Fees, GST, TDS, reserve", onEnter: () => onHoverSegment(deductionEventIds), onLeave: () => onHoverSegment(null) },
+    { key: "credited", color: "var(--success)", iconBg: "var(--success-bg)", amount: formatPaiseWhole(bridge.actual_bank_paise), caption: "Credited to bank" },
+    {
+      key: "gap",
+      color: gapNonZero ? "var(--amber-text)" : "var(--success)",
+      iconBg: gapNonZero ? "var(--amber-bg)" : "var(--success-bg)",
+      amount: formatPaiseWhole(bridge.unexplained_paise),
+      caption: "Unexplained gap",
+      clickable: gapNonZero,
+      onClick: gapNonZero
+        ? () => {
             const next = !gapSelected;
             setGapSelected(next);
-            onSelectGap(
-              next ? (unexplainedSegment?.exception_ids ?? []) : null,
-            );
-          }}
-          className={
-            "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue " +
-            (gapNonZero ? "hover:bg-ink-700 cursor-pointer" : "cursor-default")
+            onSelectGap(next ? (unexplainedSegment?.exception_ids ?? []) : null);
           }
-          aria-pressed={gapSelected}
-        >
-          <span className="font-heading font-semibold text-paper-100">
-            Unexplained
-            {gapNonZero && unexplainedSegment ? (
-              // The residual and the exceptions attributed to it are different
-              // quantities — net-of-deductions over the corpus versus gross per
-              // discrepancy — so the drill-down says what it is about to reveal.
-              // Showing only the residual meant clicking Rs 2,373.89 produced
-              // Rs 26,940.42 of rows.
-              <span className="text-paper-500 ml-2 text-xs font-normal">
-                {unexplainedSegment.exception_ids.length} exception
-                {unexplainedSegment.exception_ids.length === 1
-                  ? ""
-                  : "s"} · {formatPaise(unexplainedSegment.attributed_paise)}
-              </span>
-            ) : null}
-          </span>
-          <span
-            className={
-              "fc-numeric font-semibold " +
-              (gapNonZero ? "text-sig-red" : "text-sig-green")
-            }
-          >
-            {formatPaise(bridge.unexplained_paise)}
-            {gapNonZero ? " 🔴" : " ✓"}
-          </span>
-        </button>
-      </div>
-    </section>
-  );
-}
+        : undefined,
+    },
+  ];
 
-function BridgeRow({
-  label,
-  amountPaise,
-  widthPct,
-  bold,
-  onMouseEnter,
-  onMouseLeave,
-}: {
-  label: string;
-  amountPaise: number;
-  widthPct: number;
-  bold?: boolean;
-  onMouseEnter?: () => void;
-  onMouseLeave?: () => void;
-}) {
   return (
-    <div
-      className="group flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-ink-700"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <span
-          className={
-            "truncate text-sm " +
-            (bold ? "text-paper-100 font-semibold" : "text-paper-300")
-          }
-        >
-          {label}
-        </span>
-        <span className="bg-ink-700 h-1.5 flex-1 overflow-hidden rounded-full">
-          <span
-            className="bg-rzp-blue/60 block h-full rounded-full transition-[width] duration-200"
-            style={{ width: `${Math.min(Math.max(widthPct, 0), 100)}%` }}
-          />
-        </span>
+    <div className="fc-card">
+      <div className="flex items-center justify-between px-[22px] pt-4">
+        <div className="text-sm font-semibold">Cash Bridge</div>
       </div>
-      <span
-        className={
-          "fc-numeric shrink-0 text-sm " +
-          (bold ? "text-paper-100 font-semibold" : "text-paper-300")
-        }
-      >
-        {formatPaise(amountPaise)}
-      </span>
+      <div className="px-[22px] pt-3.5 pb-5">
+        <div className="grid grid-cols-4 gap-4">
+          {segments.map((s) => (
+            <div
+              key={s.key}
+              className={s.clickable ? "cursor-pointer" : undefined}
+              style={{ borderTop: `3px solid ${s.color}`, paddingTop: 12 }}
+              onMouseEnter={s.onEnter}
+              onMouseLeave={s.onLeave}
+              onClick={s.onClick}
+              aria-pressed={s.key === "gap" ? gapSelected : undefined}
+            >
+              <div
+                className="mb-2.5 h-[26px] w-[26px] rounded-[8px]"
+                style={{ background: s.iconBg }}
+              />
+              <div className="fc-numeric text-[22px] font-semibold whitespace-nowrap" style={{ color: s.color }}>
+                {s.amount}
+              </div>
+              <div className="mt-[3px] text-xs text-text-muted">{s.caption}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 border-t border-[color:var(--neutral-bg)] pt-3.5 text-[12.5px] text-text-body">
+          Expected in bank was {formatPaiseWhole(bridge.expected_net_paise)}. The{" "}
+          {formatPaiseWhole(bridge.unexplained_paise)} shortfall is what the review queue exists
+          to close.
+        </div>
+      </div>
     </div>
   );
 }

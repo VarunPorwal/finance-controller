@@ -430,6 +430,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/events/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count Events
+         * @description A plain ``GROUP BY source, count(*)`` behind the same RLS-scoped
+         *     session every other read uses. ``Page[T]`` deliberately carries no total
+         *     (PRD: cursor pagination, not offset), so screens that only need "how
+         *     many, by source" — Reconcile's Sources card, Records, Data Sources —
+         *     would otherwise have to page through every row just to count them.
+         */
+        get: operations["count_events_api_v1_events_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/events/{event_id}": {
         parameters: {
             query?: never;
@@ -1139,6 +1163,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/llm/calls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Llm Calls */
+        get: operations["list_llm_calls_api_v1_llm_calls_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent/parse": {
         parameters: {
             query?: never;
@@ -1435,6 +1476,10 @@ export interface components {
             cases_considered: number;
             /** Unverified */
             unverified: number;
+            /** Precision Pct */
+            precision_pct: string | null;
+            /** Coverage Pct */
+            coverage_pct: string;
         };
         /** Body_ingest_bank_api_v1_ingest_bank_post */
         Body_ingest_bank_api_v1_ingest_bank_post: {
@@ -1787,11 +1832,28 @@ export interface components {
             false_auto_resolutions: number;
             /** Auto Threshold */
             auto_threshold: string;
+            /** Gates */
+            gates: {
+                [key: string]: unknown;
+            }[];
+            /** Failures */
+            failures: {
+                [key: string]: unknown;
+            }[];
             /**
              * Computed At
              * Format: date-time
              */
             computed_at: string;
+        };
+        /** EventCountOut */
+        EventCountOut: {
+            /** By Source */
+            by_source: {
+                [key: string]: number;
+            };
+            /** Total */
+            total: number;
         };
         /** ExceptionEntriesOut */
         ExceptionEntriesOut: {
@@ -1967,6 +2029,42 @@ export interface components {
             status: string;
             /** Record Count */
             record_count: number | null;
+        };
+        /** LLMCallOut */
+        LLMCallOut: {
+            /** Call Id */
+            call_id: string;
+            /** Run Id */
+            run_id: string | null;
+            /** Purpose */
+            purpose: string;
+            /** Provider */
+            provider: string;
+            /** Model */
+            model: string;
+            /** Tier */
+            tier: string;
+            /** Ladder Position */
+            ladder_position: number;
+            /** Cached */
+            cached: boolean;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Thinking Tokens */
+            thinking_tokens: number | null;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Outcome */
+            outcome: string;
+            /** Verified */
+            verified: boolean | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** LinkOut */
         LinkOut: {
@@ -2162,6 +2260,13 @@ export interface components {
         Page_Exception__: {
             /** Items */
             items: components["schemas"]["Exception_"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** Page[LLMCallOut] */
+        Page_LLMCallOut_: {
+            /** Items */
+            items: components["schemas"]["LLMCallOut"][];
             /** Next Cursor */
             next_cursor?: string | null;
         };
@@ -3802,6 +3907,39 @@ export interface operations {
             };
         };
     };
+    count_events_api_v1_events_count_get: {
+        parameters: {
+            query?: {
+                run_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventCountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_event_api_v1_events__event_id__get: {
         parameters: {
             query?: never;
@@ -5207,6 +5345,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfusionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_llm_calls_api_v1_llm_calls_get: {
+        parameters: {
+            query?: {
+                run_id?: string | null;
+                purpose?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_LLMCallOut_"];
                 };
             };
             /** @description Validation Error */

@@ -109,11 +109,14 @@ export function AskPanel() {
   }
 
   return (
-    <div className="flex h-[70vh] flex-col gap-3">
+    // Whole surface violet — the one screen where that's structural, not an
+    // accent, because everything on it is model output (design/README.md).
+    <div className="flex h-full flex-col gap-3 rounded-[var(--radius-card)] border border-model-border bg-model-bg p-4">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto pr-1">
         {messages.length === 0 && (
-          <div className="border-rule bg-ink-800 rounded-lg border border-dashed p-6 text-center">
-            <p className="text-paper-300 mb-3 text-sm">
+          <div className="rounded-[var(--radius-card)] border border-dashed border-model-border p-6 text-center">
+            <div className="mx-auto mb-3 h-10 w-10 rounded-full" style={{ background: "radial-gradient(circle at 35% 30%, #C4B5FD, #7C3AED)" }} />
+            <p className="mb-3 text-sm text-model-text">
               Ask about this reconciliation — aggregates, breakdowns, what changed, what-ifs.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
@@ -122,7 +125,7 @@ export function AskPanel() {
                   key={q.label}
                   type="button"
                   onClick={() => void ask(q.question)}
-                  className="border-rule text-paper-300 hover:bg-ink-700 rounded-full border px-3 py-1 text-xs"
+                  className="rounded-full border border-model-border bg-white/60 px-3 py-1 text-xs text-model-text hover:bg-white"
                 >
                   {q.label}
                 </button>
@@ -136,8 +139,9 @@ export function AskPanel() {
         ))}
 
         {asking && (
-          <div className="flex justify-start">
-            <div className="border-rule bg-ink-800 flex items-center gap-1 rounded-lg border px-3 py-2">
+          <div className="flex items-end justify-start gap-2">
+            <Avatar role="assistant" />
+            <div className="flex items-center gap-1 rounded-lg border border-model-border bg-white px-3 py-2">
               <TypingDot delay="0ms" />
               <TypingDot delay="150ms" />
               <TypingDot delay="300ms" />
@@ -153,7 +157,7 @@ export function AskPanel() {
               key={q.label}
               type="button"
               onClick={() => void ask(q.question)}
-              className="border-rule text-paper-500 hover:bg-ink-700 rounded-full border px-2.5 py-0.5 text-xs"
+              className="rounded-full border border-model-border px-2.5 py-0.5 text-xs text-model-text hover:bg-white/60"
             >
               {q.label}
             </button>
@@ -171,15 +175,16 @@ export function AskPanel() {
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a follow-up…"
+          placeholder="Ask about your reconciliation…"
           aria-label="Ask a question"
           disabled={asking}
-          className="border-rule bg-ink-800 text-paper-100 placeholder:text-paper-500 flex-1 rounded-md border p-2.5 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue disabled:opacity-60"
+          className="flex-1 rounded-[9px] border border-model-border bg-white p-2.5 text-sm text-text-heading placeholder:text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-model-text disabled:opacity-60"
         />
         <button
           type="submit"
           disabled={!input.trim() || asking}
-          className="bg-rzp-blue hover:bg-rzp-blue/90 rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-[9px] px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ background: "var(--model-text)" }}
         >
           Ask
         </button>
@@ -188,10 +193,27 @@ export function AskPanel() {
   );
 }
 
+function Avatar({ role }: { role: "user" | "assistant" }) {
+  if (role === "assistant") {
+    return (
+      <div
+        className="h-6 w-6 flex-none rounded-full"
+        style={{ background: "radial-gradient(circle at 35% 30%, #C4B5FD, #7C3AED)" }}
+        aria-hidden
+      />
+    );
+  }
+  return (
+    <div className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-primary-tint text-[10px] font-semibold text-primary-active-text">
+      VP
+    </div>
+  );
+}
+
 function TypingDot({ delay }: { delay: string }) {
   return (
     <span
-      className="bg-paper-500 inline-block h-1.5 w-1.5 animate-bounce rounded-full"
+      className="inline-block h-1.5 w-1.5 animate-bounce rounded-full bg-model-text/60"
       style={{ animationDelay: delay }}
     />
   );
@@ -202,15 +224,16 @@ function MessageBubble({ message }: { message: Message }) {
   const refused = message.result && !message.result.answerable;
 
   return (
-    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+    <div className={"flex items-end gap-2 " + (isUser ? "justify-end" : "justify-start")}>
+      {!isUser && <Avatar role="assistant" />}
       <div
         className={
-          "max-w-[85%] rounded-lg border px-3 py-2 text-sm " +
+          "max-w-[80%] rounded-lg border px-3 py-2 text-sm " +
           (isUser
-            ? "bg-rzp-deep border-rzp-blue/40 text-paper-100"
+            ? "border-model-border bg-white text-text-heading"
             : refused
-              ? "border-rule bg-ink-800 text-paper-300" // §13.7: a refusal is a correct outcome, no error styling
-              : "border-rule bg-ink-800 text-paper-100")
+              ? "border-model-border bg-white/70 text-text-body" // a refusal is a correct outcome, no error styling
+              : "border-model-border bg-white text-text-heading")
         }
       >
         <p>{message.text}</p>
@@ -223,6 +246,7 @@ function MessageBubble({ message }: { message: Message }) {
           <HowIGotThis result={message.result} />
         )}
       </div>
+      {isUser && <Avatar role="user" />}
     </div>
   );
 }
@@ -230,9 +254,9 @@ function MessageBubble({ message }: { message: Message }) {
 function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
   const columns = Object.keys(rows[0] ?? {});
   return (
-    <div className="border-rule mt-2 max-h-64 overflow-auto rounded-md border">
+    <div className="border-border mt-2 max-h-64 overflow-auto rounded-md border">
       <table className="w-full text-xs">
-        <thead className="bg-ink-900 text-paper-300 sticky top-0">
+        <thead className="bg-background text-text-body sticky top-0">
           <tr>
             {columns.map((c) => (
               <th key={c} className="whitespace-nowrap px-2 py-1 text-left font-medium">
@@ -243,9 +267,9 @@ function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-rule border-t">
+            <tr key={i} className="border-border border-t">
               {columns.map((c) => (
-                <td key={c} className="fc-numeric text-paper-100 whitespace-nowrap px-2 py-1">
+                <td key={c} className="fc-numeric text-text-heading whitespace-nowrap px-2 py-1">
                   {String(row[c] ?? "—")}
                 </td>
               ))}
@@ -260,12 +284,12 @@ function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
 function HowIGotThis({ result }: { result: AskOut }) {
   return (
     <details className="mt-2">
-      <summary className="text-paper-500 hover:text-paper-300 cursor-pointer select-none text-xs">
+      <summary className="text-text-muted hover:text-text-body cursor-pointer select-none text-xs">
         How I got this
       </summary>
       <div className="mt-1 text-xs">
         {result.tool === "diff" ? (
-          <p className="text-paper-500">
+          <p className="text-text-muted">
             Compared run{" "}
             <span className="fc-numeric">{result.compared_from_run_id}</span> to run{" "}
             <span className="fc-numeric">{result.compared_to_run_id}</span> via
@@ -273,12 +297,12 @@ function HowIGotThis({ result }: { result: AskOut }) {
           </p>
         ) : (
           result.sql && (
-            <pre className="fc-numeric border-rule bg-ink-900 text-paper-300 overflow-x-auto rounded-md border p-2">
+            <pre className="fc-numeric border-border bg-background text-text-body overflow-x-auto rounded-md border p-2">
               {result.sql}
             </pre>
           )
         )}
-        <p className="text-paper-500 mt-1">
+        <p className="text-text-muted mt-1">
           {result.row_count} row{result.row_count === 1 ? "" : "s"}
           {result.cached ? " · cached" : ""}
           {result.model_used ? ` · ${result.model_used}` : ""}

@@ -30,7 +30,7 @@ const EMPTY_SLOT: SlotState = { fileName: null, loading: false, result: null, er
  * ingests into that run_id; `POST /runs/{id}/finalize` runs the cascade
  * over whatever actually got uploaded.
  */
-export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; onClose: () => void }) {
+export function IngestPanel({ onComplete }: { onComplete: () => void }) {
   const [runId, setRunId] = useState<string | null>(null);
   const [openingBalanceRupees, setOpeningBalanceRupees] = useState("1000000");
   const [slots, setSlots] = useState<Record<Source, SlotState>>({
@@ -182,44 +182,38 @@ export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; o
   const anyIngested = Object.values(slots).some((s) => s.result && s.result.event_count > 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="border-rzp-blue bg-ink-800 flex max-h-[90vh] w-[min(680px,95vw)] flex-col gap-4 overflow-y-auto rounded-lg border p-5 shadow-2xl">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="font-heading text-base font-semibold text-paper-100">Start a run</h2>
-            <p className="text-paper-500 text-xs">
-              Upload real files, or run the demo corpus in one click.
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="text-paper-500 hover:text-paper-100 text-sm" aria-label="Close">
-            ✕
-          </button>
-        </div>
+    <div className="fc-card flex flex-col gap-4 p-5">
+      <div>
+        <h2 className="text-base font-semibold text-text-heading">Start a run</h2>
+        <p className="text-text-muted text-xs">
+          Upload real files, or run the demo corpus in one click.
+        </p>
+      </div>
 
-        <div className="border-rule bg-ink-900 flex items-center justify-between gap-3 rounded-lg border p-3">
-          <p className="text-paper-300 text-sm">Run the generated demo corpus, no upload needed.</p>
+        <div className="border-border bg-background flex items-center justify-between gap-3 rounded-lg border p-3">
+          <p className="text-text-body text-sm">Run the generated demo corpus, no upload needed.</p>
           <button
             type="button"
             disabled={demoRunning}
             onClick={runDemoCorpus}
-            className="bg-rzp-blue hover:bg-rzp-blue/90 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-primary hover:bg-primary/90 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {demoRunning ? "Running…" : "Run demo corpus"}
           </button>
         </div>
-        {demoError && <p className="text-sig-amber text-xs">{demoError}</p>}
+        {demoError && <p className="text-amber-text text-xs">{demoError}</p>}
 
-        <div className="border-rule border-t pt-4">
-          <p className="text-paper-300 mb-3 text-xs font-medium uppercase tracking-wide">
-            Or upload your own {runId && <span className="fc-numeric text-paper-500">· {runId}</span>}
+        <div className="border-border border-t pt-4">
+          <p className="text-text-body mb-3 text-xs font-medium uppercase tracking-wide">
+            Or upload your own {runId && <span className="fc-numeric text-text-muted">· {runId}</span>}
           </p>
 
           <label className="mb-3 flex items-center gap-2 text-xs">
-            <span className="text-paper-300">Bank opening balance ₹</span>
+            <span className="text-text-body">Bank opening balance ₹</span>
             <input
               value={openingBalanceRupees}
               onChange={(e) => setOpeningBalanceRupees(e.target.value)}
-              className="fc-numeric border-rule bg-ink-900 text-paper-100 w-28 rounded-md border p-1"
+              className="fc-numeric border-border bg-background text-text-heading w-28 rounded-md border p-1"
             />
           </label>
 
@@ -230,18 +224,17 @@ export function IngestPanel({ onComplete, onClose }: { onComplete: () => void; o
           </div>
         </div>
 
-        <div className="border-rule border-t pt-3">
+        <div className="border-border border-t pt-3">
           <button
             type="button"
             disabled={!runId || !anyIngested || finalizing}
             onClick={finalize}
-            className="bg-rzp-blue hover:bg-rzp-blue/90 w-full rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="bg-primary hover:bg-primary/90 w-full rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {finalizing ? "Reconciling…" : "Reconcile what's ingested"}
           </button>
-          {finalizeError && <p className="text-sig-amber mt-2 text-xs">{finalizeError}</p>}
+          {finalizeError && <p className="text-amber-text mt-2 text-xs">{finalizeError}</p>}
         </div>
-      </div>
     </div>
   );
 }
@@ -256,14 +249,14 @@ function SlotRow({
   onFile: (file: File) => void;
 }) {
   return (
-    <div className="border-rule bg-ink-900 rounded-lg border p-3">
+    <div className="border-border bg-background rounded-lg border p-3">
       <div className="flex items-center justify-between gap-3">
-        <label className="text-paper-100 flex-1 text-sm font-medium">
+        <label className="text-text-heading flex-1 text-sm font-medium">
           {source.label}
           <input
             type="file"
             accept={source.accept}
-            className="text-paper-300 mt-1 block w-full text-xs"
+            className="text-text-body mt-1 block w-full text-xs"
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) onFile(file);
@@ -273,18 +266,18 @@ function SlotRow({
       </div>
 
       {state.loading && (
-        <p className="text-paper-500 mt-2 text-xs">Ingesting {state.fileName}…</p>
+        <p className="text-text-muted mt-2 text-xs">Ingesting {state.fileName}…</p>
       )}
 
       {state.result && (
         <div className="mt-2 text-xs">
-          <p className="text-paper-300">
-            <span className="text-sig-green font-semibold">{state.result.event_count}</span> rows
+          <p className="text-text-body">
+            <span className="text-success font-semibold">{state.result.event_count}</span> rows
             parsed
             {state.result.rejections.length > 0 && (
               <>
                 {" · "}
-                <span className="text-sig-amber font-semibold">
+                <span className="text-amber-text font-semibold">
                   {state.result.rejections.length}
                 </span>{" "}
                 rejected
@@ -294,9 +287,9 @@ function SlotRow({
               <>
                 {" · balance "}
                 {state.result.balanced ? (
-                  <span className="text-sig-green">continuity holds ✓</span>
+                  <span className="text-success">continuity holds ✓</span>
                 ) : (
-                  <span className="text-sig-amber">broke, ingested anyway (CSV is trusted)</span>
+                  <span className="text-amber-text">broke, ingested anyway (CSV is trusted)</span>
                 )}
               </>
             )}
@@ -304,7 +297,7 @@ function SlotRow({
           {state.result.rejections.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">
               {state.result.rejections.map((r, i) => (
-                <li key={i} className="text-paper-500 fc-numeric">
+                <li key={i} className="text-text-muted fc-numeric">
                   row {r.source_row_id ?? "?"}: {r.reason}
                 </li>
               ))}
@@ -313,7 +306,7 @@ function SlotRow({
           {state.result.breaks.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">
               {state.result.breaks.map((b, i) => (
-                <li key={i} className="text-sig-amber fc-numeric">
+                <li key={i} className="text-amber-text fc-numeric">
                   row {b.row}: expected {formatPaise(b.expected_paise)}, found{" "}
                   {formatPaise(b.found_paise)}
                 </li>
@@ -325,11 +318,11 @@ function SlotRow({
 
       {state.error && (
         <div className="mt-2 text-xs">
-          <p className="text-sig-red">{state.error.detail}</p>
+          <p className="text-error">{state.error.detail}</p>
           {state.error.breaks && state.error.breaks.length > 0 && (
             <ul className="mt-1 flex flex-col gap-0.5">
               {state.error.breaks.map((b, i) => (
-                <li key={i} className="text-sig-red fc-numeric">
+                <li key={i} className="text-error fc-numeric">
                   row {b.row}: expected {formatPaise(b.expected_paise)}, found{" "}
                   {formatPaise(b.found_paise)}
                 </li>
@@ -337,7 +330,7 @@ function SlotRow({
             </ul>
           )}
           {state.error.rowCount != null && (
-            <p className="text-paper-500 mt-1">
+            <p className="text-text-muted mt-1">
               {state.error.rowCount} rows transcribed, nothing saved.
             </p>
           )}

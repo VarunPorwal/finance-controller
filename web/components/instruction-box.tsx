@@ -165,10 +165,10 @@ export function InstructionBox({
   const canConfirm = !!preview && !refusal && typedOk && ackOk && !executing;
 
   return (
-    <div className="border-rule bg-ink-800 rounded-lg border p-4">
+    <div className="border-border bg-card rounded-lg border p-4">
       <label
         htmlFor="instruction"
-        className="text-paper-300 mb-2 block text-xs font-medium"
+        className="text-text-body mb-2 block text-xs font-medium"
       >
         Tell the agent what this is…
       </label>
@@ -185,14 +185,14 @@ export function InstructionBox({
           }}
           disabled={parsing || executing}
           placeholder="e.g. This is a bank credit that landed after the statement cut-off"
-          className="border-rule bg-ink-900 text-paper-100 placeholder:text-paper-500 flex-1 resize-none rounded-md border p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue disabled:opacity-60"
+          className="border-border bg-background text-text-heading placeholder:text-text-muted flex-1 resize-none rounded-md border p-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60"
           rows={2}
         />
         <button
           type="button"
           onClick={() => void parse()}
           disabled={!text.trim() || parsing || executing}
-          className="bg-rzp-blue hover:bg-rzp-blue/90 self-start rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="bg-primary hover:bg-primary/90 self-start rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
         >
           {parsing ? "Reading…" : "Preview"}
         </button>
@@ -201,12 +201,12 @@ export function InstructionBox({
       {error && <RefusalBlock refusal={error} />}
 
       {parsed?.parse_unavailable && (
-        <div className="border-rule bg-ink-900 mt-3 rounded-md border p-3 text-sm">
-          <p className="text-paper-300">
+        <div className="border-border bg-background mt-3 rounded-md border p-3 text-sm">
+          <p className="text-text-body">
             No model could parse that sentence. The same actions are available
             directly:
           </p>
-          <p className="fc-numeric text-paper-500 mt-1">
+          <p className="fc-numeric text-text-muted mt-1">
             {parsed.form_verbs.join(" · ")}
           </p>
         </div>
@@ -215,14 +215,14 @@ export function InstructionBox({
       {refusal && <RefusalBlock refusal={refusal} />}
 
       {preview && !refusal && (
-        <div className="border-rule bg-ink-900 mt-3 space-y-3 rounded-md border p-3">
-          <p className="text-paper-100 text-sm">{preview.summary}</p>
+        <div className="border-border bg-background mt-3 space-y-3 rounded-md border p-3">
+          <p className="text-text-heading text-sm">{preview.summary}</p>
 
           {preview.effects.length > 0 && (
             <ul className="space-y-1">
               {preview.effects.map((e, i) => (
-                <li key={i} className="text-paper-300 text-xs">
-                  <span className="text-paper-100 font-medium">{e.action}</span>{" "}
+                <li key={i} className="text-text-body text-xs">
+                  <span className="text-text-heading font-medium">{e.action}</span>{" "}
                   {e.subject} — {e.summary}
                 </li>
               ))}
@@ -230,14 +230,14 @@ export function InstructionBox({
           )}
 
           {preview.warnings.map((w) => (
-            <p key={w.code} className="text-sig-amber text-xs">
+            <p key={w.code} className="text-amber-text text-xs">
               {w.message}
             </p>
           ))}
 
           {preview.requires_typed_confirmation && (
             <div>
-              <label htmlFor="typed" className="text-paper-300 block text-xs">
+              <label htmlFor="typed" className="text-text-body block text-xs">
                 Over {formatPaise(preview.typed_confirmation_paise ?? 0)} — type
                 the amount in paise to confirm
               </label>
@@ -245,13 +245,13 @@ export function InstructionBox({
                 id="typed"
                 value={typedConfirmation}
                 onChange={(e) => setTypedConfirmation(e.target.value)}
-                className="border-rule bg-ink-800 text-paper-100 fc-numeric mt-1 w-48 rounded-md border p-1.5 text-sm"
+                className="border-border bg-card text-text-heading fc-numeric mt-1 w-48 rounded-md border p-1.5 text-sm"
               />
             </div>
           )}
 
           {preview.requires_acknowledgement && (
-            <label className="text-paper-300 flex items-start gap-2 text-xs">
+            <label className="text-text-body flex items-start gap-2 text-xs">
               <input
                 type="checkbox"
                 checked={acknowledged}
@@ -267,7 +267,7 @@ export function InstructionBox({
               type="button"
               onClick={() => void execute(false)}
               disabled={!canConfirm}
-              className="bg-rzp-blue hover:bg-rzp-blue/90 rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="bg-primary hover:bg-primary/90 rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
             >
               {executing
                 ? "Applying…"
@@ -280,7 +280,7 @@ export function InstructionBox({
                 type="button"
                 onClick={() => void execute(true)}
                 disabled={!canConfirm}
-                className="border-rule bg-ink-800 hover:bg-ink-700 text-paper-100 rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
+                className="border-border bg-card hover:bg-neutral-bg text-text-heading rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Apply to all {preview.cluster_offer.member_count + 1}
               </button>
@@ -289,14 +289,14 @@ export function InstructionBox({
               type="button"
               onClick={reset}
               disabled={executing}
-              className="text-paper-300 hover:text-paper-100 px-2 py-1.5 text-sm"
+              className="text-text-body hover:text-text-heading px-2 py-1.5 text-sm"
             >
               Cancel
             </button>
           </div>
 
           {preview.cluster_offer && (
-            <p className="text-paper-500 text-xs">
+            <p className="text-text-muted text-xs">
               {preview.cluster_offer.member_count} other exception
               {preview.cluster_offer.member_count === 1 ? "" : "s"} share this
               root cause. Any that fail validation are excluded and named, never
@@ -307,12 +307,12 @@ export function InstructionBox({
       )}
 
       {result && (
-        <div className="border-rule bg-ink-900 mt-3 rounded-md border p-3 text-sm">
-          <p className="text-sig-green">
+        <div className="border-border bg-background mt-3 rounded-md border p-3 text-sm">
+          <p className="text-success">
             Applied to {result.applied.filter((a) => a.ok).length} exception
             {result.applied.filter((a) => a.ok).length === 1 ? "" : "s"}
             {result.audit_seq != null && (
-              <span className="text-paper-500">
+              <span className="text-text-muted">
                 {" "}
                 · audit #{result.audit_seq}
               </span>
@@ -320,10 +320,10 @@ export function InstructionBox({
           </p>
           {result.excluded.length > 0 && (
             <>
-              <p className="text-sig-amber mt-2 text-xs">
+              <p className="text-amber-text mt-2 text-xs">
                 Excluded {result.excluded.length}, by name:
               </p>
-              <ul className="fc-numeric text-paper-300 mt-1 space-y-0.5 text-xs">
+              <ul className="fc-numeric text-text-body mt-1 space-y-0.5 text-xs">
                 {result.excluded.map((e) => (
                   <li key={e.exception_id}>
                     {e.exception_id.slice(-8)} —{" "}
@@ -343,16 +343,16 @@ function RefusalBlock({ refusal }: { refusal: Refusal }) {
   return (
     <div
       role="alert"
-      className="border-sig-red/40 bg-sig-red/10 mt-3 rounded-md border p-3 text-sm"
+      className="border-error/40 bg-error/10 mt-3 rounded-md border p-3 text-sm"
     >
-      <p className="text-sig-red font-heading font-semibold">Not doing that</p>
-      <p className="text-paper-100 mt-1">{refusal.message}</p>
+      <p className="text-error font-semibold">Not doing that</p>
+      <p className="text-text-heading mt-1">{refusal.message}</p>
       {refusal.candidates.length > 0 && (
         <>
-          <p className="text-paper-300 mt-2 text-xs">
+          <p className="text-text-body mt-2 text-xs">
             Closest matches — none has been chosen for you:
           </p>
-          <ul className="fc-numeric text-paper-300 mt-1 space-y-0.5 text-xs">
+          <ul className="fc-numeric text-text-body mt-1 space-y-0.5 text-xs">
             {refusal.candidates.map((c) => (
               <li key={c}>{c}</li>
             ))}

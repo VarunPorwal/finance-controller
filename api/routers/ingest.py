@@ -223,6 +223,7 @@ async def ingest_razorpay(
         subject_type="run",
         subject_id=run_id,
         payload={
+            "filename": file.filename,
             "event_count": inserted,
             "rejection_count": len(result.rejections),
             "deduplicated": len(result.events) - inserted,
@@ -292,6 +293,7 @@ async def ingest_bank(
         subject_id=run_id,
         payload={
             "event_count": inserted,
+            "filename": file.filename,
             "rejection_count": len(result.rejections),
             "deduplicated": len(result.events) - inserted,
             "balanced": bank_result.balanced,
@@ -337,6 +339,7 @@ async def ingest_ledger(
         payload={
             "event_count": inserted,
             "rejection_count": len(result.rejections),
+            "filename": file.filename,
             "deduplicated": len(result.events) - inserted,
             "dry_run": dry_run,
         },

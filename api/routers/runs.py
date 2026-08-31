@@ -17,6 +17,8 @@ is the thing this simplification gives up.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from typing import Literal
@@ -47,16 +49,26 @@ from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode
 from api.ruleset import COMPOSITION_KEY, resolve_ruleset
 from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
-from db.models import ExceptionRow, Run, Tenant, TransactionEventRow
+from db.models import EvalResult, ExceptionRow, Run, Tenant, TransactionEventRow
 from db.models import Match as MatchRow
 from fc.audit.replay import ReplayDiff, diff_exceptions, replay
 from fc.config import Config
 from fc.eval.corpus import load_corpus
+from fc.eval.report import SHIPPED_AUTO_THRESHOLD, EvalReport, GateResult, check_gates, evaluate
 from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory, new_ulid
 from fc.pipeline import PIPELINE_STAGES, PipelineResult, run_pipeline
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+logger = logging.getLogger(__name__)
+
+#: Measured, not guessed (CLAUDE.md: "measure it and pick"). Inline eval
+#: triples the cascade's work (evaluate()'s own pipeline pass, plus
+#: check_gates()'s determinism re-run) on top of create_run's normal pipeline
+#: call. Past this, POST /runs {mode: "demo"} would rather return once the
+#: reconciliation itself is done and let the frontend fetch eval results
+#: separately — logged for now so the real number decides, not a guess.
+_EVAL_LATENCY_WARN_SECONDS = 15.0
 
 
 class RunOut(BaseModel):
@@ -416,6 +428,87 @@ def _persist_pipeline_result(
         )
 
 
+def _persist_eval_result(
+    session: AsyncSession,
+    *,
+    run_id: str,
+    tenant_id: str,
+    report: EvalReport,
+    gates: tuple[GateResult, ...],
+) -> None:
+    """Score the demo corpus against its own ground truth and attach the
+    result to the *live* run_id that was just created from it — not
+    ``fc.eval.corpus.RUN_ID`` (``"run_eval"``), which is an internal id the
+    eval harness uses for its own pipeline pass and has nothing to do with
+    any row in ``runs``.
+
+    Only ever called for ``mode="demo"`` runs: they are the only runs
+    ingested from ``fc.eval.corpus.load_corpus()``, so they are the only
+    runs with ground truth to score against. A ``mode="empty"`` run
+    (real uploaded data via Data Sources) gets no ``eval_results`` row —
+    ``GET /eval/{run_id}`` 404s for it, on purpose, rather than scoring real
+    data against a synthetic corpus's ground truth.
+    """
+    session.add(
+        EvalResult(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            true_positive=report.confusion.tp,
+            false_positive=report.confusion.fp,
+            true_negative=report.confusion.tn,
+            false_negative=report.confusion.fn,
+            precision_pct=report.confusion.precision_auto,
+            recall_pct=report.confusion.recall,
+            f1=report.confusion.f1,
+            abstention_pct=report.abstention_rate,
+            false_auto_resolutions=report.false_auto_resolutions,
+            auto_threshold=SHIPPED_AUTO_THRESHOLD,
+            coverage_curve=[
+                {
+                    "threshold": str(p.threshold),
+                    "coverage": float(p.coverage),
+                    "precision": float(p.precision),
+                    "false_positives": p.false_positives,
+                    "abstentions": p.abstentions,
+                }
+                for p in report.coverage_curve
+            ],
+            by_category={
+                stat.category: {
+                    "raised": stat.raised,
+                    "gt_total": stat.gt_total,
+                    "correct": stat.correct,
+                    "precision": float(stat.precision),
+                    "recall": float(stat.recall),
+                }
+                for stat in report.category_stats
+            },
+            by_stage={
+                stage: {
+                    "precision": float(precision),
+                    "recall": float(report.stage_recall.get(stage, 0)),
+                }
+                for stage, precision in report.stage_precision.items()
+            },
+            gates=[
+                {"name": g.name, "passed": g.passed, "actual": g.actual, "threshold": g.threshold}
+                for g in gates
+            ],
+            failures=[
+                {
+                    "kind": f.kind,
+                    "event_ids": list(f.event_ids),
+                    "amount_paise": f.amount_paise,
+                    "gt_label": f.gt_label,
+                    "our_label": f.our_label,
+                    "why": f.why,
+                }
+                for f in report.failures
+            ],
+        )
+    )
+
+
 @router.post("", response_model=RunOut)
 async def create_run(
     body: CreateRunRequest,
@@ -521,6 +614,23 @@ async def create_run(
         created_at=started_at,
     )
     _persist_pipeline_result(session, run_id=run_id, tenant_id=user.tenant_id, result=result)
+
+    # Ground truth only exists for the demo corpus — this is the one branch
+    # that can score itself, so it's the one place eval_results gets a row.
+    eval_started = time.monotonic()
+    eval_report = evaluate(corpus, cfg, rules=ruleset.rules)
+    gates = check_gates(eval_report, cfg)
+    _persist_eval_result(session, run_id=run_id, tenant_id=user.tenant_id, report=eval_report, gates=gates)
+    eval_seconds = time.monotonic() - eval_started
+    if eval_seconds > _EVAL_LATENCY_WARN_SECONDS:
+        logger.warning(
+            "demo run %s: inline eval took %.1fs (budget %.0fs) — consider moving to a "
+            "separate POST /runs/%s/evaluate the frontend calls after creation",
+            run_id,
+            eval_seconds,
+            _EVAL_LATENCY_WARN_SECONDS,
+            run_id,
+        )
 
     finished_at = datetime.now(UTC)
     run_row.finished_at = finished_at

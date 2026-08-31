@@ -10,9 +10,9 @@ type Rule = components["schemas"]["Rule"];
 type SuggestionOut = components["schemas"]["SuggestionOut"];
 
 const STATUS_COLOR: Record<Rule["status"], string> = {
-  draft: "text-paper-300",
-  active: "text-sig-green",
-  retired: "text-paper-500",
+  draft: "text-text-body",
+  active: "text-success",
+  retired: "text-text-muted",
 };
 
 /**
@@ -103,27 +103,27 @@ export function RulebookPanel() {
   }
 
   if (error) {
-    return <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">{error}</div>;
+    return <div className="text-amber-text border-border bg-card rounded-lg border p-4 text-sm">{error}</div>;
   }
 
   return (
     <div className="flex flex-col gap-6">
       <section aria-label="Suggestions inbox">
-        <h2 className="font-heading text-paper-300 mb-2 text-xs font-semibold uppercase tracking-wide">
+        <h2 className="text-text-body mb-2 text-xs font-semibold uppercase tracking-wide">
           Suggestions inbox {suggestions ? `· ${suggestions.length}` : ""}
         </h2>
         {suggestions && suggestions.length === 0 && (
-          <p className="text-paper-500 text-sm">No learned drafts waiting on approval.</p>
+          <p className="text-text-muted text-sm">No learned drafts waiting on approval.</p>
         )}
         <ul className="flex flex-col gap-2">
           {suggestions?.map((s) => (
             <li
               key={s.signature}
-              className="border-rule bg-ink-800 flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"
+              className="border-border bg-card flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"
             >
               <div>
-                <p className="text-paper-100 text-sm font-medium">{s.rule.name}</p>
-                <p className="text-paper-500 text-xs">
+                <p className="text-text-heading text-sm font-medium">{s.rule.name}</p>
+                <p className="text-text-muted text-xs">
                   {s.occurrences}× {humanizeSnakeCase(s.resolution_category)} · observed rate{" "}
                   {s.observed_rate_percent}%
                 </p>
@@ -132,14 +132,14 @@ export function RulebookPanel() {
                 <button
                   type="button"
                   onClick={() => acceptSuggestion(s.signature)}
-                  className="bg-rzp-blue hover:bg-rzp-blue/90 rounded-md px-3 py-1.5 text-xs font-medium text-white"
+                  className="bg-primary hover:bg-primary/90 rounded-md px-3 py-1.5 text-xs font-medium text-white"
                 >
                   Accept
                 </button>
                 <button
                   type="button"
                   onClick={() => dismissSuggestion(s.signature)}
-                  className="border-rule text-paper-300 hover:bg-ink-700 rounded-md border px-3 py-1.5 text-xs"
+                  className="border-border text-text-body hover:bg-neutral-bg rounded-md border px-3 py-1.5 text-xs"
                 >
                   Dismiss
                 </button>
@@ -150,14 +150,14 @@ export function RulebookPanel() {
       </section>
 
       <section aria-label="Rule list">
-        <h2 className="font-heading text-paper-300 mb-2 text-xs font-semibold uppercase tracking-wide">
+        <h2 className="text-text-body mb-2 text-xs font-semibold uppercase tracking-wide">
           Rules {rules ? `· ${latestByRuleId.length}` : ""}
         </h2>
         {!rules && (
-          <div className="border-rule bg-ink-800 h-24 animate-pulse rounded-lg border" aria-hidden />
+          <div className="border-border bg-card h-24 animate-pulse rounded-lg border" aria-hidden />
         )}
         {rules && latestByRuleId.length === 0 && (
-          <p className="text-paper-500 text-sm">No rules yet — create one below.</p>
+          <p className="text-text-muted text-sm">No rules yet — create one below.</p>
         )}
         <ul className="flex flex-col gap-1">
           {latestByRuleId.map((rule) => (
@@ -174,7 +174,7 @@ export function RulebookPanel() {
       </section>
 
       <section aria-label="New rule">
-        <h2 className="font-heading text-paper-300 mb-2 text-xs font-semibold uppercase tracking-wide">
+        <h2 className="text-text-body mb-2 text-xs font-semibold uppercase tracking-wide">
           New rule
         </h2>
         <RuleAuthoringForm onSubmit={createRule} submitting={creating} />
@@ -225,16 +225,16 @@ function RuleRow({
   }, [expanded, versions, rule.rule_id]);
 
   return (
-    <li className="border-rule bg-ink-800 rounded-lg border">
+    <li className="border-border bg-card rounded-lg border">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between gap-3 p-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue"
+        className="flex w-full items-center justify-between gap-3 p-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       >
         <div className="min-w-0">
-          <p className="text-paper-100 truncate text-sm font-medium">{rule.name}</p>
-          <p className="text-paper-500 fc-numeric text-xs">
+          <p className="text-text-heading truncate text-sm font-medium">{rule.name}</p>
+          <p className="text-text-muted fc-numeric text-xs">
             {rule.rule_id} · v{rule.version} · effective {rule.effective_from}
             {rule.effective_to ? ` – ${rule.effective_to}` : " –"}
           </p>
@@ -244,25 +244,25 @@ function RuleRow({
         </span>
       </button>
       {expanded && (
-        <div className="border-rule border-t p-3">
+        <div className="border-border border-t p-3">
           {rule.backtest_result ? (
-            <p className="text-paper-300 mb-2 text-xs">
+            <p className="text-text-body mb-2 text-xs">
               Last back-test:{" "}
               {typeof rule.backtest_result.net_recommendation === "string"
                 ? rule.backtest_result.net_recommendation
                 : "recorded"}
             </p>
           ) : (
-            <p className="text-paper-500 mb-2 text-xs">No back-test recorded on this version.</p>
+            <p className="text-text-muted mb-2 text-xs">No back-test recorded on this version.</p>
           )}
-          <p className="text-paper-300 mb-1 text-xs font-medium">Version history</p>
-          {!versions && <p className="text-paper-500 text-xs">loading…</p>}
+          <p className="text-text-body mb-1 text-xs font-medium">Version history</p>
+          {!versions && <p className="text-text-muted text-xs">loading…</p>}
           <ul className="flex flex-col gap-1">
             {versions
               ?.slice()
               .sort((a, b) => a.version - b.version)
               .map((v, i, arr) => (
-                <li key={v.version} className="fc-numeric text-paper-300 text-xs">
+                <li key={v.version} className="fc-numeric text-text-body text-xs">
                   v{v.version} · {v.status} · {formatDecimalPercent(v.effective_confidence)} confidence
                   {i > 0 && <VersionDiff before={arr[i - 1]} after={v} />}
                 </li>
@@ -281,5 +281,5 @@ function VersionDiff({ before, after }: { before: Rule; after: Rule }) {
   if (JSON.stringify(before.tolerance) !== JSON.stringify(after.tolerance)) changed.push("tolerance");
   if (before.priority !== after.priority) changed.push("priority");
   if (!changed.length) return null;
-  return <span className="text-paper-500"> — changed: {changed.join(", ")}</span>;
+  return <span className="text-text-muted"> — changed: {changed.join(", ")}</span>;
 }

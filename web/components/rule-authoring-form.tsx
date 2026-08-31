@@ -146,14 +146,14 @@ export function RuleAuthoringForm({
   const canSubmit = name.trim().length > 0 && deductions.length > 0 && dateFrom;
 
   return (
-    <div className="border-rule bg-ink-800 flex flex-col gap-4 rounded-lg border p-4">
+    <div className="border-border bg-card flex flex-col gap-4 rounded-lg border p-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Rule name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Blinkit commission v3"
-            className="border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
         <Field label="Counterparty matches">
@@ -161,7 +161,7 @@ export function RuleAuthoringForm({
             value={counterparty}
             onChange={(e) => setCounterparty(e.target.value)}
             placeholder="BLINKIT"
-            className="border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
         <Field label="Effective from">
@@ -169,7 +169,7 @@ export function RuleAuthoringForm({
             type="date"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
-            className="fc-numeric border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="fc-numeric border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
         <Field label="Priority (higher wins)">
@@ -177,7 +177,7 @@ export function RuleAuthoringForm({
             type="number"
             value={priority}
             onChange={(e) => setPriority(e.target.value)}
-            className="fc-numeric border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="fc-numeric border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
         <Field label="Source">
@@ -204,14 +204,14 @@ export function RuleAuthoringForm({
       </div>
 
       <div>
-        <div className="text-paper-300 mb-2 text-xs font-medium">Deduction stack</div>
+        <div className="text-text-body mb-2 text-xs font-medium">Deduction stack</div>
         <div className="flex flex-col gap-2">
           {deductions.map((d, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
               <select
                 value={d.type}
                 onChange={(e) => updateDeduction(i, { type: e.target.value as DeductionInput["type"] })}
-                className="border-rule bg-ink-900 text-paper-100 rounded-md border p-1.5 text-xs"
+                className="border-border bg-background text-text-heading rounded-md border p-1.5 text-xs"
               >
                 {DEDUCTION_TYPES.map((t) => (
                   <option key={t} value={t}>
@@ -219,11 +219,11 @@ export function RuleAuthoringForm({
                   </option>
                 ))}
               </select>
-              <span className="text-paper-500 text-xs">on</span>
+              <span className="text-text-muted text-xs">on</span>
               <select
                 value={d.basis}
                 onChange={(e) => updateDeduction(i, { basis: e.target.value as DeductionInput["basis"] })}
-                className="border-rule bg-ink-900 text-paper-100 rounded-md border p-1.5 text-xs"
+                className="border-border bg-background text-text-heading rounded-md border p-1.5 text-xs"
               >
                 {DEDUCTION_BASES.map((b) => (
                   <option key={b} value={b}>
@@ -235,19 +235,19 @@ export function RuleAuthoringForm({
                 value={d.rate}
                 onChange={(e) => updateDeduction(i, { rate: e.target.value })}
                 placeholder="rate %"
-                className="fc-numeric border-rule bg-ink-900 text-paper-100 w-20 rounded-md border p-1.5 text-xs"
+                className="fc-numeric border-border bg-background text-text-heading w-20 rounded-md border p-1.5 text-xs"
               />
-              <span className="text-paper-500 text-xs">%</span>
+              <span className="text-text-muted text-xs">%</span>
               <input
                 value={d.fixed_paise}
                 onChange={(e) => updateDeduction(i, { fixed_paise: e.target.value })}
                 placeholder="flat paise (optional)"
-                className="fc-numeric border-rule bg-ink-900 text-paper-100 w-32 rounded-md border p-1.5 text-xs"
+                className="fc-numeric border-border bg-background text-text-heading w-32 rounded-md border p-1.5 text-xs"
               />
               <button
                 type="button"
                 onClick={() => setDeductions((prev) => prev.filter((_, idx) => idx !== i))}
-                className="text-sig-red text-xs hover:underline"
+                className="text-error text-xs hover:underline"
               >
                 Remove
               </button>
@@ -256,7 +256,7 @@ export function RuleAuthoringForm({
           <button
             type="button"
             onClick={() => setDeductions((prev) => [...prev, { ...EMPTY_DEDUCTION }])}
-            className="text-rzp-blue w-fit text-xs font-medium hover:underline"
+            className="text-primary w-fit text-xs font-medium hover:underline"
           >
             + Add deduction line
           </button>
@@ -268,44 +268,44 @@ export function RuleAuthoringForm({
           <input
             value={toleranceAbsPaise}
             onChange={(e) => setToleranceAbsPaise(e.target.value)}
-            className="fc-numeric border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="fc-numeric border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
         <Field label="Tolerance, percent">
           <input
             value={tolerancePercent}
             onChange={(e) => setTolerancePercent(e.target.value)}
-            className="fc-numeric border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+            className="fc-numeric border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
           />
         </Field>
       </div>
 
-      <div className="border-rule bg-ink-900 rounded-lg border p-3">
+      <div className="border-border bg-background rounded-lg border p-3">
         <div className="mb-2 flex items-center gap-2">
-          <label htmlFor="sample-gross" className="text-paper-300 text-xs font-medium">
+          <label htmlFor="sample-gross" className="text-text-body text-xs font-medium">
             Live preview on a sample transaction, gross ₹
           </label>
           <input
             id="sample-gross"
             value={sampleGrossRupees}
             onChange={(e) => setSampleGrossRupees(e.target.value)}
-            className="fc-numeric border-rule bg-ink-800 text-paper-100 w-28 rounded-md border p-1 text-xs"
+            className="fc-numeric border-border bg-card text-text-heading w-28 rounded-md border p-1 text-xs"
           />
         </div>
-        {previewError && <p className="text-sig-amber text-xs">{previewError}</p>}
+        {previewError && <p className="text-amber-text text-xs">{previewError}</p>}
         {preview && (
           <div className="flex flex-col gap-1">
             {preview.stack.map((line, i) => (
               <div key={i} className="fc-numeric flex items-center justify-between text-xs">
-                <span className="text-paper-300">
+                <span className="text-text-body">
                   {line.type} on {line.basis} ({line.rate}%)
                 </span>
-                <span className="text-paper-100">{formatPaise(line.amount_paise)}</span>
+                <span className="text-text-heading">{formatPaise(line.amount_paise)}</span>
               </div>
             ))}
-            <div className="border-rule fc-numeric mt-1 flex items-center justify-between border-t pt-1 text-xs font-semibold">
-              <span className="text-paper-100">Net</span>
-              <span className="text-paper-100">{formatPaise(preview.net_paise)}</span>
+            <div className="border-border fc-numeric mt-1 flex items-center justify-between border-t pt-1 text-xs font-semibold">
+              <span className="text-text-heading">Net</span>
+              <span className="text-text-heading">{formatPaise(preview.net_paise)}</span>
             </div>
           </div>
         )}
@@ -315,7 +315,7 @@ export function RuleAuthoringForm({
         type="button"
         disabled={!canSubmit || submitting}
         onClick={submit}
-        className="bg-rzp-blue hover:bg-rzp-blue/90 w-fit rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+        className="bg-primary hover:bg-primary/90 w-fit rounded-md px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
       >
         {submitting ? "Creating…" : "Create draft rule"}
       </button>
@@ -326,7 +326,7 @@ export function RuleAuthoringForm({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-paper-300 text-xs font-medium">{label}</span>
+      <span className="text-text-body text-xs font-medium">{label}</span>
       {children}
     </label>
   );
@@ -345,7 +345,7 @@ function Select({
     <select
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
-      className="border-rule bg-ink-900 text-paper-100 w-full rounded-md border p-2 text-sm"
+      className="border-border bg-background text-text-heading w-full rounded-md border p-2 text-sm"
     >
       <option value="">any</option>
       {options.map((o) => (

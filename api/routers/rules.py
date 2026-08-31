@@ -14,6 +14,7 @@ rather than at each call site.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
@@ -28,6 +29,7 @@ from api.notify import notify_rule_suggestion
 from db.models import ExceptionRow, TransactionEventRow
 from db.models import Rule as RuleRow
 from fc.config import Config
+from fc.eval.confusion import ratio
 from fc.models.ids import new_ulid
 from fc.models.rule import Deduction, Rule, RuleStatus, Scope, Tolerance
 from fc.rules.backtest import BacktestResult, CaseTruth, HistoricalCase, backtest
@@ -120,6 +122,12 @@ class BacktestOut(BaseModel):
     net_recommendation: str
     cases_considered: int
     unverified: int
+    #: Of the cases this rule would touch (explain + wrongly_close), what
+    #: share it would resolve correctly. None when it would touch none.
+    precision_pct: Decimal | None
+    #: Of every historical case considered, what share this rule would
+    #: explain. Zero when there is nothing to consider.
+    coverage_pct: Decimal
 
 
 class SuggestionOut(BaseModel):
@@ -295,6 +303,7 @@ def _bucket_out(bucket: object) -> BacktestBucketOut:
 
 
 def _backtest_out(result: BacktestResult) -> BacktestOut:
+    touched = result.would_explain.count + result.would_wrongly_close.count
     return BacktestOut(
         rule_id=result.rule_id,
         version=result.version,
@@ -305,6 +314,8 @@ def _backtest_out(result: BacktestResult) -> BacktestOut:
         net_recommendation=result.net_recommendation,
         cases_considered=result.cases_considered,
         unverified=result.unverified,
+        precision_pct=ratio(result.would_explain.count, touched) if touched else None,
+        coverage_pct=ratio(result.would_explain.count, result.cases_considered),
     )
 
 

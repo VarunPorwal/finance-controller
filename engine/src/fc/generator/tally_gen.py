@@ -100,6 +100,11 @@ def build(
         )
 
     for settlement in settlements:
+        # Scenario 21: the bank never credited this settlement, so there is no
+        # receipt for the books to record. Razorpay alone claims it, which is
+        # what leaves the gateway row unmatched and files it missing_in_bank.
+        if settlement.skip_bank_row:
+            continue
         counterparty = (
             "RAZORPAY" if settlement.channel == "own_store" else (settlement.platform or "").upper()
         )
@@ -148,7 +153,9 @@ def build(
                     scenario=settlement.scenario,
                 )
 
-            if order.dispute_paise and settlement.scenario != 6:
+            # Scenarios 6 and 20 are both chargebacks the ledger never
+            # recorded; 20 additionally carries no dispute id to contest with.
+            if order.dispute_paise and settlement.scenario not in (6, 20):
                 emit(
                     d=settlement.settle_date,
                     voucher_type="Journal",

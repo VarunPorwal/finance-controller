@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.converters import event_from_row
@@ -65,6 +65,31 @@ async def list_events(
     items = [event_from_row(r) for r in rows[:limit]]
     next_cursor = encode_cursor(items[-1].event_id) if len(rows) > limit else None
     return Page(items=items, next_cursor=next_cursor)
+
+
+class EventCountOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    by_source: dict[str, int]
+    total: int
+
+
+@router.get("/count", response_model=EventCountOut)
+async def count_events(
+    run_id: str | None = None, session: AsyncSession = Depends(db_session)
+) -> EventCountOut:
+    """A plain ``GROUP BY source, count(*)`` behind the same RLS-scoped
+    session every other read uses. ``Page[T]`` deliberately carries no total
+    (PRD: cursor pagination, not offset), so screens that only need "how
+    many, by source" — Reconcile's Sources card, Records, Data Sources —
+    would otherwise have to page through every row just to count them.
+    """
+    stmt = select(TransactionEventRow.source, func.count()).group_by(TransactionEventRow.source)
+    if run_id is not None:
+        stmt = stmt.where(TransactionEventRow.run_id == await event_source_run_id(session, run_id))
+    rows = (await session.execute(stmt)).all()
+    by_source = {source: count for source, count in rows}
+    return EventCountOut(by_source=by_source, total=sum(by_source.values()))
 
 
 async def _load(session: AsyncSession, event_id: str) -> TransactionEventRow:
