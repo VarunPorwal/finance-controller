@@ -159,6 +159,12 @@ class LLMResult(BaseModel):
     model: str
     tier: str
     ladder_position: int
+    #: Identifies this call across the two records it can produce. A purpose in
+    #: HAS_DOWNSTREAM_CHECK is logged once by ``call`` and again by
+    #: ``confirm``/``reject`` once the deterministic check has ruled; carrying
+    #: the id means the second record updates the first row instead of
+    #: inserting a duplicate. Empty for a result that was never logged.
+    call_id: str = ""
     cached: bool = False
     terminal: bool = False
     #: ``None`` means "awaiting a downstream check" — see :data:`HAS_DOWNSTREAM_CHECK`.
@@ -183,6 +189,11 @@ class LLMCallRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    #: Stable across the ``call`` record and the later ``confirm``/``reject``
+    #: record for the same call, so the persister can upsert rather than
+    #: double-count. Twenty-two sql_narrate rows in production were eleven
+    #: calls logged twice, the second with an empty prompt_hash.
+    call_id: str
     tenant_id: str | None = None
     run_id: str | None = None
     purpose: str

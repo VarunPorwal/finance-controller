@@ -19,6 +19,7 @@ pooled connection: the ``finally`` block below rolls back anything still open.
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from collections.abc import AsyncIterator
@@ -212,6 +213,9 @@ async def finish(session: AsyncSession, *, dry_run: bool) -> None:
 # --- LLM wiring (PRD §7) -----------------------------------------------------
 
 
+_LOG = logging.getLogger(__name__)
+
+
 class LLMCallBuffer:
     """Holds the records the router emitted until a session can write them.
 
@@ -239,6 +243,10 @@ class LLMCallBuffer:
         with self._lock:
             drained, self._records = self._records, []
         return drained
+
+    def pending(self) -> bool:
+        with self._lock:
+            return bool(self._records)
 
 
 @lru_cache(maxsize=1)
@@ -336,31 +344,72 @@ async def persist_llm_calls(
     LLM call; it can only fail the request that was already writing to the
     database.
     """
-    from db.models import LLMCall
-    from fc.models.ids import new_ulid
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+    from db.models import LLMCall
+
+    # Upsert on call_id, not insert. A purpose in HAS_DOWNSTREAM_CHECK is
+    # logged twice for one call — once by ``call`` and once by
+    # ``confirm``/``reject`` when the deterministic check rules — and the two
+    # records now share an id, so the second updates the verdict on the first
+    # row. Inserting both is what made twenty-two sql_narrate rows out of
+    # eleven calls, half of them with an empty prompt_hash, and doubled the
+    # apparent cost of every ask.
     for record in buffer.drain():
-        session.add(
-            LLMCall(
-                call_id=new_ulid("llm_"),
-                tenant_id=record.tenant_id or tenant_id,
-                run_id=record.run_id,
-                purpose=record.purpose,
-                provider=record.provider,
-                model=record.model,
-                tier=record.tier,
-                ladder_position=record.ladder_position,
-                prompt_hash=record.prompt_hash,
-                cached=record.cached,
-                input_tokens=record.input_tokens,
-                output_tokens=record.output_tokens,
-                thinking_tokens=record.thinking_tokens,
-                latency_ms=record.latency_ms,
-                outcome=record.outcome,
-                verified=record.verified,
+        values = dict(
+            call_id=record.call_id,
+            tenant_id=record.tenant_id or tenant_id,
+            run_id=record.run_id,
+            purpose=record.purpose,
+            provider=record.provider,
+            model=record.model,
+            tier=record.tier,
+            ladder_position=record.ladder_position,
+            prompt_hash=record.prompt_hash,
+            cached=record.cached,
+            input_tokens=record.input_tokens,
+            output_tokens=record.output_tokens,
+            thinking_tokens=record.thinking_tokens,
+            latency_ms=record.latency_ms,
+            outcome=record.outcome,
+            verified=record.verified,
+        )
+        await session.execute(
+            pg_insert(LLMCall)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=[LLMCall.call_id],
+                # Only what the downstream check can change. prompt_hash and the
+                # token counts stay as the original call recorded them — the
+                # confirm record carries neither.
+                set_={"verified": record.verified, "outcome": record.outcome},
             )
         )
     await session.flush()
+
+
+async def persist_llm_calls_detached(buffer: LLMCallBuffer, *, tenant_id: str, role: str) -> None:
+    """Record LLM calls in their own transaction, for a request that is failing.
+
+    :func:`persist_llm_calls` deliberately writes inside the caller's
+    transaction, so a dry run leaves no trace of its own calls. That is right
+    for a dry run and wrong for a rejection: a PDF extraction that fails its
+    balance check still reached the provider and still spent quota, but the 422
+    rolls the request back and takes the cost record with it. No pdf_extract row
+    has ever been written for that reason.
+
+    Opening a separate session keeps the cost even though the work is discarded.
+    Failures are swallowed — losing an observability row must not turn a
+    well-formed 422 into a 500.
+    """
+    if not buffer.pending():
+        return
+    try:
+        async with scoped_session(tenant_id, role) as session:
+            await persist_llm_calls(session, buffer, tenant_id=tenant_id)
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        _LOG.exception("could not record llm_calls out of band; the calls still happened")
 
 
 async def rescope(session: AsyncSession, user: AuthenticatedUser) -> None:

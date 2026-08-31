@@ -33,7 +33,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.audit_log import append_audit
@@ -55,7 +55,7 @@ from api.errors import ApiError
 from api.routers import exceptions as exceptions_router
 from api.routers import rules as rules_router
 from db.models import Cluster as ClusterRow
-from db.models import ExceptionRow, Run, TransactionEventRow
+from db.models import ExceptionRow, LLMCall, Run, TransactionEventRow
 from fc.agent.permissions import can, roles_permitting
 from fc.agent.validator import (
     CommandContext,
@@ -1702,11 +1702,37 @@ async def get_narrative(
 async def agent_health(
     run_id: str | None = None,
     client: LLMClient = Depends(get_llm_client),
+    session: AsyncSession = Depends(db_session),
 ) -> HealthOut:
-    """§7.11. The header status strip, and the honest answer to "how does this
-    scale" — ``health_scope`` says ``process``, because that is where the quota
-    counters live."""
-    from fc.llm.client import PROMPT_HASHES
+    """§7.11. The header status strip, and the honest answer to "how much quota
+    is left" — which now comes from ``llm_calls`` rather than from counters that
+    reset with the process.
+
+    The client counts calls in memory. On a host that redeploys several times a
+    day that meant "17 of 20 remaining" really said "17 remaining since the last
+    restart", and it can only ever over-report headroom. Seeding the counters
+    from today's persisted rows makes ``health_scope`` say ``database``.
+
+    Only uncached rows count: a cache hit never reached the provider and never
+    spent quota.
+    """
+    from fc.llm.client import PROMPT_HASHES, TIERS
+
+    quota_key_of = {spec.model: spec.quota_key for models in TIERS.values() for spec in models}
+    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    rows = (
+        await session.execute(
+            select(LLMCall.model, func.count())
+            .where(LLMCall.created_at >= midnight, LLMCall.cached.is_(False))
+            .group_by(LLMCall.model)
+        )
+    ).all()
+    used: dict[str, int] = {}
+    for model, count in rows:
+        key = quota_key_of.get(model)
+        if key is not None:
+            used[key] = used.get(key, 0) + count
+    client.sync_day_counts(used)
 
     snapshot = client.health_snapshot()
     return HealthOut(

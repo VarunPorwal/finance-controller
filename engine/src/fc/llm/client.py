@@ -32,6 +32,7 @@ import logging
 import math
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -695,6 +696,8 @@ class LLMClient:
         self._monotonic = monotonic
         self._now = now or (lambda: datetime.now(UTC))
         self._sink = sink
+        #: "process" until sync_day_counts replaces the counters with durable ones.
+        self._health_scope = "process"
         self._providers: dict[str, Any] = dict(providers or {})
         self.tiers = {name: Tier(name, models) for name, models in TIERS.items()}
         # Keyed on ``quota_key``, so standard and deep share one counter for
@@ -764,6 +767,7 @@ class LLMClient:
             hit = self.cache.get(tenant_id, key)
             if hit is not None:
                 self.ledger.record(run_id, cached=True)
+                hit = hit.model_copy(update={"call_id": self._new_call_id()})
                 self._log(hit, purpose, prompt_hash, tenant_id, run_id, "ok")
                 return hit
 
@@ -908,6 +912,7 @@ class LLMClient:
         # cached here — only ``confirm()`` writes it. See HAS_DOWNSTREAM_CHECK.
         verified: bool | None = None if purpose in HAS_DOWNSTREAM_CHECK else True
         result = LLMResult(
+            call_id=self._new_call_id(),
             text=raw.text,
             purpose=purpose,
             provider=spec.provider,
@@ -941,6 +946,8 @@ class LLMClient:
         verified = result.model_copy(update={"verified": True})
         if not verified.cached and verified.cache_key:
             self.cache.set(tenant_id, verified.cache_key, verified)
+        # Same call_id as the ``call`` record, so this updates that row
+        # rather than inserting a second one for the same call.
         self._log(verified, result.purpose, "", tenant_id, run_id, "ok")
         return verified
 
@@ -963,6 +970,7 @@ class LLMClient:
         name = TASK_ROUTE[purpose][-1].removeprefix("TERMINAL:")
         text = TERMINALS[name](purpose, fallback)
         result = LLMResult(
+            call_id=self._new_call_id(),
             text=text,
             purpose=purpose,
             provider="none",
@@ -1017,8 +1025,29 @@ class LLMClient:
             "degraded": self.degraded,
             # Guard (§7.3): quota undercount. Stated in the API, not only in a
             # docstring, so "how does this scale" has an honest answer on screen.
-            "health_scope": "process",
+            "health_scope": self._health_scope,
         }
+
+    def sync_day_counts(self, counts: Mapping[str, int]) -> None:
+        """Replace the in-process daily counters with durable ones.
+
+        The counters live on this object, so they reset when the process does
+        and each worker counts only its own calls. On a free-tier host that
+        redeploys several times a day, "17 of 20 remaining" was really "17
+        remaining since the last restart" — a number that only ever
+        over-reports headroom, which is the wrong direction to be wrong in when
+        the question is whether a demo will run out of quota.
+
+        ``counts`` is keyed by ``quota_key`` and comes from ``llm_calls``,
+        which survives both. A key that is absent is left alone rather than
+        zeroed, so a model nobody has called today keeps whatever this process
+        knows.
+        """
+        for quota_key, used in counts.items():
+            health = self.health.get(quota_key)
+            if health is not None:
+                health.day_count = used
+        self._health_scope = "database"
 
     def budget(self) -> dict[str, Any]:
         """Daily request budget, deduplicated by quota bucket.
@@ -1133,6 +1162,7 @@ class LLMClient:
     ) -> None:
         self._emit(
             LLMCallRecord(
+                call_id=result.call_id or self._new_call_id(),
                 tenant_id=tenant_id,
                 run_id=run_id,
                 purpose=purpose,
@@ -1164,6 +1194,7 @@ class LLMClient:
     ) -> None:
         self._emit(
             LLMCallRecord(
+                call_id=self._new_call_id(),
                 tenant_id=tenant_id,
                 run_id=run_id,
                 purpose=purpose,
@@ -1178,6 +1209,15 @@ class LLMClient:
                 created_at=self._now(),
             )
         )
+
+    def _new_call_id(self) -> str:
+        """A fresh id for one logged call.
+
+        uuid4 rather than a ULID because ``engine/`` must not depend on the
+        id-factory plumbing the pipeline uses, and nothing orders these by id —
+        ``created_at`` does that.
+        """
+        return f"llm_{uuid.uuid4().hex}"
 
     def _emit(self, record: LLMCallRecord) -> None:
         if self._sink is None:

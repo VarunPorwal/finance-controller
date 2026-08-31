@@ -1222,9 +1222,17 @@ export interface paths {
         };
         /**
          * Agent Health
-         * @description §7.11. The header status strip, and the honest answer to "how does this
-         *     scale" — ``health_scope`` says ``process``, because that is where the quota
-         *     counters live.
+         * @description §7.11. The header status strip, and the honest answer to "how much quota
+         *     is left" — which now comes from ``llm_calls`` rather than from counters that
+         *     reset with the process.
+         *
+         *     The client counts calls in memory. On a host that redeploys several times a
+         *     day that meant "17 of 20 remaining" really said "17 remaining since the last
+         *     restart", and it can only ever over-report headroom. Seeding the counters
+         *     from today's persisted rows makes ``health_scope`` say ``database``.
+         *
+         *     Only uncached rows count: a cache hit never reached the provider and never
+         *     spent quota.
          */
         get: operations["agent_health_api_v1_agent_health_get"];
         put?: never;
@@ -5294,7 +5302,9 @@ export interface operations {
             query?: {
                 run_id?: string | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

@@ -29,6 +29,7 @@ from api.deps import (
     get_llm_buffer,
     get_llm_client,
     persist_llm_calls,
+    persist_llm_calls_detached,
 )
 from api.errors import ApiError
 from db.models import Run, TransactionEventRow
@@ -268,6 +269,7 @@ async def ingest_bank(
             client=client,
             buffer=buffer,
             session=session,
+            role=user.role,
         )
     else:
         bank_result = parse_bank_csv(
@@ -409,6 +411,7 @@ async def _extract_pdf(
     client: LLMClient,
     buffer: LLMCallBuffer,
     session: AsyncSession,
+    role: str,
 ) -> BankIngestResult:
     """PRD §7.7. A model reads the statement; arithmetic decides whether to
     believe it.
@@ -430,6 +433,11 @@ async def _extract_pdf(
             ingested_at=now,
         )
     except ExtractionRejected as exc:
+        # The extraction reached the provider and spent quota even though its
+        # output is being thrown away, so the cost is recorded in its own
+        # transaction — this 422 rolls the request back and would take the
+        # llm_calls rows with it.
+        await persist_llm_calls_detached(buffer, tenant_id=tenant_id, role=role)
         raise ApiError(
             422,
             "extraction rejected",
@@ -443,9 +451,10 @@ async def _extract_pdf(
             row_count=exc.row_count,
         ) from exc
     except ExtractionUnavailable as exc:
+        await persist_llm_calls_detached(buffer, tenant_id=tenant_id, role=role)
         raise ApiError(
             422, "extraction unavailable", str(exc), type_="https://fc.dev/errors/extraction"
         ) from exc
-    finally:
+    else:
         await persist_llm_calls(session, buffer, tenant_id=tenant_id)
     return extraction.ingest
