@@ -1435,6 +1435,11 @@ export interface components {
             event_ids: string[];
             /** Exception Ids */
             exception_ids: string[];
+            /**
+             * Attributed Paise
+             * @default 0
+             */
+            attributed_paise: number;
         };
         /** BulkAction */
         BulkAction: {

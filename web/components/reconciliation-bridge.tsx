@@ -35,9 +35,12 @@ export function ReconciliationBridge({
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const { data, error: fetchError } = await apiClient.GET("/api/v1/cash/bridge", {
-        params: { query: { run_id: runId } },
-      });
+      const { data, error: fetchError } = await apiClient.GET(
+        "/api/v1/cash/bridge",
+        {
+          params: { query: { run_id: runId } },
+        },
+      );
       if (cancelled) return;
       if (fetchError || !data) {
         setError("could not load the cash bridge");
@@ -52,16 +55,26 @@ export function ReconciliationBridge({
   }, [runId]);
 
   if (error) {
-    return <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">{error}</div>;
+    return (
+      <div className="text-sig-amber border-rule bg-ink-800 rounded-lg border p-4 text-sm">
+        {error}
+      </div>
+    );
   }
   if (!bridge) {
     return (
-      <div className="border-rule bg-ink-800 h-40 animate-pulse rounded-lg border" aria-hidden />
+      <div
+        className="border-rule bg-ink-800 h-40 animate-pulse rounded-lg border"
+        aria-hidden
+      />
     );
   }
 
   const scale = Math.max(Math.abs(bridge.gross_collected_paise), 1);
   const gapNonZero = bridge.unexplained_paise !== 0;
+  const unexplainedSegment = bridge.segments.find(
+    (s: Segment) => s.label === "Unexplained",
+  );
 
   return (
     <section
@@ -72,7 +85,12 @@ export function ReconciliationBridge({
         Reconciliation Bridge
       </h2>
 
-      <BridgeRow label="Gross collected" amountPaise={bridge.gross_collected_paise} widthPct={100} bold />
+      <BridgeRow
+        label="Gross collected"
+        amountPaise={bridge.gross_collected_paise}
+        widthPct={100}
+        bold
+      />
 
       <div className="border-rule my-2 border-l-2 pl-3">
         {bridge.deductions.map((segment) => (
@@ -87,7 +105,12 @@ export function ReconciliationBridge({
         ))}
       </div>
 
-      <BridgeRow label="Expected net" amountPaise={bridge.expected_net_paise} widthPct={100} bold />
+      <BridgeRow
+        label="Expected net"
+        amountPaise={bridge.expected_net_paise}
+        widthPct={100}
+        bold
+      />
       <BridgeRow
         label="vs. bank credited"
         amountPaise={bridge.actual_bank_paise}
@@ -101,8 +124,9 @@ export function ReconciliationBridge({
           onClick={() => {
             const next = !gapSelected;
             setGapSelected(next);
-            const unexplained = bridge.segments.find((s: Segment) => s.label === "Unexplained");
-            onSelectGap(next ? (unexplained?.exception_ids ?? []) : null);
+            onSelectGap(
+              next ? (unexplainedSegment?.exception_ids ?? []) : null,
+            );
           }}
           className={
             "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rzp-blue " +
@@ -110,10 +134,26 @@ export function ReconciliationBridge({
           }
           aria-pressed={gapSelected}
         >
-          <span className="font-heading font-semibold text-paper-100">Unexplained</span>
+          <span className="font-heading font-semibold text-paper-100">
+            Unexplained
+            {gapNonZero && unexplainedSegment ? (
+              // The residual and the exceptions attributed to it are different
+              // quantities — net-of-deductions over the corpus versus gross per
+              // discrepancy — so the drill-down says what it is about to reveal.
+              // Showing only the residual meant clicking Rs 2,373.89 produced
+              // Rs 26,940.42 of rows.
+              <span className="text-paper-500 ml-2 text-xs font-normal">
+                {unexplainedSegment.exception_ids.length} exception
+                {unexplainedSegment.exception_ids.length === 1
+                  ? ""
+                  : "s"} · {formatPaise(unexplainedSegment.attributed_paise)}
+              </span>
+            ) : null}
+          </span>
           <span
             className={
-              "fc-numeric font-semibold " + (gapNonZero ? "text-sig-red" : "text-sig-green")
+              "fc-numeric font-semibold " +
+              (gapNonZero ? "text-sig-red" : "text-sig-green")
             }
           >
             {formatPaise(bridge.unexplained_paise)}
@@ -149,7 +189,8 @@ function BridgeRow({
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span
           className={
-            "truncate text-sm " + (bold ? "text-paper-100 font-semibold" : "text-paper-300")
+            "truncate text-sm " +
+            (bold ? "text-paper-100 font-semibold" : "text-paper-300")
           }
         >
           {label}
@@ -162,7 +203,10 @@ function BridgeRow({
         </span>
       </div>
       <span
-        className={"fc-numeric shrink-0 text-sm " + (bold ? "text-paper-100 font-semibold" : "text-paper-300")}
+        className={
+          "fc-numeric shrink-0 text-sm " +
+          (bold ? "text-paper-100 font-semibold" : "text-paper-300")
+        }
       >
         {formatPaise(amountPaise)}
       </span>

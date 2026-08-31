@@ -25,9 +25,16 @@ class BridgeSegmentOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str
+    #: This segment's place in the bridge arithmetic. For "Unexplained" that is
+    #: expected_net - actual_bank, the residual the whole bridge balances on.
     amount_paise: int
     event_ids: list[str]
     exception_ids: list[str]
+    #: What ``exception_ids`` actually total. Not the same quantity as
+    #: ``amount_paise`` and not reconcilable with it — the residual is net over
+    #: the corpus, these are gross per-discrepancy amounts. A drill-down must
+    #: display this one, or it shows rows that do not add up to its own heading.
+    attributed_paise: int = 0
 
 
 class CashBridgeOut(BaseModel):
@@ -51,6 +58,7 @@ def _segment_out(segment: object) -> BridgeSegmentOut:
         amount_paise=segment.amount_paise,  # type: ignore[attr-defined]
         event_ids=list(segment.event_ids),  # type: ignore[attr-defined]
         exception_ids=list(segment.exception_ids),  # type: ignore[attr-defined]
+        attributed_paise=segment.attributed_paise,  # type: ignore[attr-defined]
     )
 
 

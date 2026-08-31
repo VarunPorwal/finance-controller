@@ -24,7 +24,7 @@ explain it — so the bridge in the UI can be clicked straight into the queue.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from fc.models.exception_ import Exception_
@@ -50,12 +50,33 @@ _UNEXPLAINED_CATEGORIES = frozenset(
 
 @dataclass(frozen=True)
 class BridgeSegment:
-    """One row of the bridge: a label, an amount, and what proves it."""
+    """One row of the bridge: a label, an amount, and what proves it.
+
+    ``amount_paise`` and ``attributed_paise`` are two different questions and
+    the segment carries both because conflating them produced a wrong figure on
+    screen. ``amount_paise`` is the segment's place in the bridge arithmetic —
+    for "Unexplained" that is ``expected_net - actual_bank``, the balancing
+    residual the whole bridge must sum to. ``attributed_paise`` is what the
+    exceptions named in ``exception_ids`` actually total.
+
+    They are not the same number and cannot be made the same. The residual is
+    net over the whole corpus after MDR, GST, TDS, refunds, chargebacks and
+    reserve have been taken out; the exceptions are gross per-discrepancy
+    amounts that overlap those same deductions. On the reference corpus the
+    residual is ₹2,373.89 and the attributed exceptions total ₹26,940.42.
+
+    Clicking the residual used to reveal the attributed set, so a drill-down on
+    ₹2,373.89 displayed ₹26,940.42 of exceptions. Carrying both means whichever
+    number a reader clicks, the rows they get sum to it.
+    """
 
     label: str
     amount_paise: int
     event_ids: tuple[str, ...]
     exception_ids: tuple[str, ...] = ()
+    #: Sum of ``amount_paise`` over ``exception_ids``. Always reconciles with
+    #: them, because :func:`_attribute` computes the pair together.
+    attributed_paise: int = 0
 
 
 @dataclass(frozen=True)
@@ -70,6 +91,20 @@ class CashBridge:
     cash_at_risk_paise: int
     reserve_pending_release_paise: int
     gst_input_credit_claimable_paise: int
+
+
+def _attribute(
+    exceptions: Sequence[Exception_], predicate: Callable[[Exception_], bool]
+) -> tuple[tuple[str, ...], int]:
+    """The exceptions a segment is attributed to, and what they total.
+
+    One function returns both halves so the ids and the total cannot drift
+    apart — the ids were built by a comprehension and the total was never built
+    at all, which is how a segment came to display a number no set of rows
+    added up to.
+    """
+    selected = sorted((e for e in exceptions if predicate(e)), key=lambda e: e.exception_id)
+    return tuple(e.exception_id for e in selected), sum(e.amount_paise for e in selected)
 
 
 def compute_cash_bridge(
@@ -147,11 +182,11 @@ def compute_cash_bridge(
     )
     unexplained_paise = expected_net_paise - actual_bank_paise
 
-    chargeback_exception_ids = tuple(
-        sorted(e.exception_id for e in exceptions if e.category == "chargeback_unrecorded")
+    chargeback_exception_ids, chargeback_attributed = _attribute(
+        exceptions, lambda e: e.category == "chargeback_unrecorded"
     )
-    unexplained_exception_ids = tuple(
-        sorted(e.exception_id for e in exceptions if e.category in _UNEXPLAINED_CATEGORIES)
+    unexplained_exception_ids, unexplained_attributed = _attribute(
+        exceptions, lambda e: e.category in _UNEXPLAINED_CATEGORIES
     )
 
     deductions = (
@@ -164,6 +199,7 @@ def compute_cash_bridge(
             chargeback_paise,
             tuple(chargeback_ids),
             exception_ids=chargeback_exception_ids,
+            attributed_paise=chargeback_attributed,
         ),
         BridgeSegment(
             "Rolling reserve",
@@ -172,9 +208,22 @@ def compute_cash_bridge(
         ),
     )
     unexplained_segment = BridgeSegment(
-        "Unexplained", unexplained_paise, (), exception_ids=unexplained_exception_ids
+        "Unexplained",
+        unexplained_paise,
+        (),
+        exception_ids=unexplained_exception_ids,
+        attributed_paise=unexplained_attributed,
     )
     segments = (*deductions, unexplained_segment)
+
+    by_id = {e.exception_id: e for e in exceptions}
+    for segment in segments:
+        restated = sum(by_id[i].amount_paise for i in segment.exception_ids if i in by_id)
+        if restated != segment.attributed_paise:
+            raise ValueError(
+                f"bridge segment {segment.label!r} attributes {segment.attributed_paise} paise "
+                f"to {len(segment.exception_ids)} exception(s) that total {restated} paise"
+            )
 
     total_paise = sum(segment.amount_paise for segment in segments)
     if total_paise != gross_paise - actual_bank_paise:
