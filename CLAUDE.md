@@ -246,6 +246,19 @@ target that enforces them.
   generator emits — change the other side in the same commit, or ingestion
   silently stops matching what it's fed.
 
+## Git
+
+**Never use `git add -A` or `git add .`. Stage files by explicit path.**
+
+A second agent may be working in this same checkout. Staging everything commits
+their in-progress work along with yours. On 31 Aug this committed another
+session's half-finished migration, whose revision id was 36 characters against
+`alembic_version.version_num VARCHAR(32)`; the deploy died on the version
+stamp and production went down.
+
+Before any commit, run `git status` and say which files are about to be staged.
+If any of them are outside what you touched, stop and ask.
+
 ## Quality gates (block merge)
 
 - `false_auto_resolutions == 0` on the eval corpus
