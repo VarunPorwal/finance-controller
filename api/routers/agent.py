@@ -857,9 +857,9 @@ async def execute_command(
         session, command=command, targets=targets, user=user, cfg=cfg, dry_run=dry_run
     )
 
-    # Each dispatched endpoint called ``finish``, which ended the transaction
-    # this session's tenant scope was set on. Re-apply it before writing
-    # anything else, or RLS refuses the audit event below.
+    # The last dispatched endpoint called ``finish``, ending the transaction
+    # the tenant scope was set on. Re-apply it before the audit insert below.
+    # (_dispatch rescopes per item for the same reason; this covers the tail.)
     await rescope(session, user)
 
     audit = await append_audit(
@@ -1082,6 +1082,15 @@ async def _dispatch(
     others down with it (§8.6). ``finish`` inside each endpoint commits its own
     work, which is why a failure mid-way leaves the earlier items applied and
     named in the response instead of silently rolled back.
+
+    That same commit is why :func:`rescope` runs at the top of *every*
+    iteration rather than once after the loop. ``set_config(..., is_local=true)``
+    is transaction-scoped, so the first item's ``finish`` takes the tenant scope
+    down with it and every later item queries as no tenant at all: RLS returns
+    no row, ``_load`` raises 404, and the item lands in ``excluded`` looking
+    like a legitimate "already resolved". Applying a four-member cluster
+    resolved exactly one and reported HTTP 200 — the failure was silent
+    precisely because per-item error reporting is working as designed.
     """
     payload = command.payload
     verb = command.verb
@@ -1089,6 +1098,7 @@ async def _dispatch(
     excluded: list[AppliedOut] = []
 
     for target in targets:
+        await rescope(session, user)
         try:
             await _apply_one(
                 session,
