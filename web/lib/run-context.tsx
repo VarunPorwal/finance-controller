@@ -1,6 +1,12 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { apiClient, type components } from "./client";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
@@ -31,20 +37,20 @@ export function RunProvider({ children }: { children: ReactNode }) {
     async function load() {
       setLoading(true);
       setError(null);
-      // The newest *original, complete* run — not the newest row of any kind.
-      // A replay is a what-if and a run still open for ingestion has nothing
-      // reconciled yet; landing on either is how the app came to open on a
-      // screen with no bridge and no records.
-      const { data: runs, error: listError } = await apiClient.GET("/api/v1/runs", {
-        params: { query: { limit: 1, kind: "original", status: "complete" } },
-      });
+      // The run the tenant pinned, resolved server-side. Deriving it here
+      // from "newest original and complete" meant an upload made to test the
+      // ingest slot could become the run that loads on open.
+      const { data: pinned, error: listError } = await apiClient.GET(
+        "/api/v1/runs/default",
+        {},
+      );
       if (cancelled) return;
-      if (listError || !runs || runs.items.length === 0) {
+      if (listError || !pinned) {
         setLoading(false);
         setError(listError ? "could not reach the API" : "no runs yet");
         return;
       }
-      const runId = runs.items[0].run_id;
+      const runId = pinned.run_id;
       const { data: runSummary, error: summaryError } = await apiClient.GET(
         "/api/v1/runs/{run_id}/summary",
         { params: { path: { run_id: runId } } },
@@ -66,7 +72,12 @@ export function RunProvider({ children }: { children: ReactNode }) {
 
   return (
     <RunContext.Provider
-      value={{ summary, loading, error, refresh: () => setGeneration((g) => g + 1) }}
+      value={{
+        summary,
+        loading,
+        error,
+        refresh: () => setGeneration((g) => g + 1),
+      }}
     >
       {children}
     </RunContext.Provider>

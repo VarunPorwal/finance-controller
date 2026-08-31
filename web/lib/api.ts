@@ -138,6 +138,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Default Run
+         * @description The run the app opens on — pinned in tenant settings, not inferred.
+         *
+         *     Declared before ``/{run_id}`` so FastAPI matches the literal path first.
+         *
+         *     Deriving the default from "newest original and complete" meant it moved
+         *     every time anyone reconciled anything: an upload made to test the ingest
+         *     slot became the run a judge sees on open. Pinning it in
+         *     ``tenants.settings.default_run_id`` makes what loads a decision somebody
+         *     took, and a run selector can still navigate away from it without the
+         *     default drifting.
+         *
+         *     Falls back to the newest original, complete run when nothing is pinned, or
+         *     when the pinned run has since been deleted — the app must still open.
+         */
+        get: operations["get_default_run_api_v1_runs_default_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -3217,6 +3249,37 @@ export interface operations {
                 "application/json": components["schemas"]["CreateRunRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_default_run_api_v1_runs_default_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
