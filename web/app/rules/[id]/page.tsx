@@ -3,18 +3,30 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { use } from "react";
-import { CheckCheck } from "lucide-react";
+import { CheckCheck, Archive, GitBranchPlus } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, humanizeSnakeCase, formatPercent } from "@/lib/format";
 
 type Rule = components["schemas"]["Rule"];
 type BacktestOut = components["schemas"]["BacktestOut"];
+type DeductionInput = components["schemas"]["Deduction-Input"];
+
+interface DeductionDraft {
+  type: DeductionInput["type"];
+  basis: DeductionInput["basis"];
+  rate: string;
+  fixed_paise: string;
+}
 
 export default function RuleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const [versions, setVersions] = useState<Rule[] | null>(null);
   const [backtest, setBacktest] = useState<BacktestOut | null>(null);
+  const [retiring, setRetiring] = useState(false);
+  const [draftingVersion, setDraftingVersion] = useState(false);
+  const [versionDeductions, setVersionDeductions] = useState<DeductionDraft[]>([]);
+  const [submittingVersion, setSubmittingVersion] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +73,56 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
     router.refresh();
   }
 
+  async function retire() {
+    if (!latest) return;
+    const reason = window.prompt("Reason to retire this rule (it stops applying to new runs):");
+    if (!reason?.trim()) return;
+    setRetiring(true);
+    await apiClient.POST("/api/v1/rules/{rule_id}/retire", {
+      params: { path: { rule_id: id }, query: { version: latest.version } },
+      body: { reason: reason.trim() },
+    });
+    setRetiring(false);
+    router.refresh();
+  }
+
+  function openNewVersion() {
+    if (!latest) return;
+    setVersionDeductions(
+      (latest.deductions ?? []).map((d) => ({
+        type: d.type,
+        basis: d.basis,
+        rate: d.rate != null ? String(d.rate) : "",
+        fixed_paise: d.fixed_paise != null ? String(d.fixed_paise) : "",
+      })),
+    );
+    setDraftingVersion(true);
+  }
+
+  async function submitNewVersion() {
+    if (!latest) return;
+    setSubmittingVersion(true);
+    const { data } = await apiClient.POST("/api/v1/rules/{rule_id}/versions", {
+      params: { path: { rule_id: id } },
+      body: {
+        scope: latest.scope,
+        deductions: versionDeductions.map((d) => ({
+          type: d.type,
+          basis: d.basis,
+          rate: d.rate,
+          fixed_paise: d.fixed_paise ? Number(d.fixed_paise) : null,
+        })),
+        tolerance: latest.tolerance,
+        priority: latest.priority,
+        effective_confidence: latest.effective_confidence,
+      },
+    });
+    setSubmittingVersion(false);
+    if (!data) return;
+    setDraftingVersion(false);
+    router.refresh();
+  }
+
   const scopeFields = [
     { label: "Counterparty", value: latest.scope.counterparty_matches ?? "Any" },
     { label: "Payment rail", value: latest.scope.rail ?? "Any" },
@@ -100,17 +162,94 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
             {latest.scope.counterparty_matches ?? "Any counterparty"}
           </div>
         </div>
-        {latest.status === "draft" && (
-          <button
-            type="button"
-            onClick={activate}
-            className="flex items-center gap-1.5 rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success"
-          >
-            <CheckCheck width={12} height={12} />
-            Activate
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {latest.status === "draft" && (
+            <button
+              type="button"
+              onClick={activate}
+              className="flex items-center gap-1.5 rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success"
+            >
+              <CheckCheck width={12} height={12} />
+              Activate
+            </button>
+          )}
+          {latest.status === "active" && (
+            <>
+              <button
+                type="button"
+                onClick={openNewVersion}
+                className="flex items-center gap-1.5 rounded-[7px] border border-border px-3 py-1.5 text-xs font-semibold text-text-body"
+              >
+                <GitBranchPlus width={12} height={12} />
+                New version
+              </button>
+              <button
+                type="button"
+                disabled={retiring}
+                onClick={retire}
+                className="flex items-center gap-1.5 rounded-[7px] bg-error-bg px-3 py-1.5 text-xs font-semibold text-error disabled:opacity-50"
+              >
+                <Archive width={12} height={12} />
+                {retiring ? "Retiring…" : "Retire"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {draftingVersion && (
+        <div className="fc-card mb-5 p-5">
+          <div className="mb-3 text-sm font-semibold">
+            Draft version {latest.version + 1} — edit deduction rates
+          </div>
+          <div className="flex flex-col gap-2">
+            {versionDeductions.map((d, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="w-32 text-text-body">{humanizeSnakeCase(d.type)}</span>
+                <span className="text-text-muted text-xs">on {d.basis}</span>
+                <input
+                  value={d.rate}
+                  onChange={(e) =>
+                    setVersionDeductions((prev) =>
+                      prev.map((x, idx) => (idx === i ? { ...x, rate: e.target.value } : x)),
+                    )
+                  }
+                  placeholder="rate %"
+                  className="fc-numeric w-20 rounded-md border border-border bg-background p-1.5 text-xs"
+                />
+                <span className="text-xs text-text-muted">%</span>
+                <input
+                  value={d.fixed_paise}
+                  onChange={(e) =>
+                    setVersionDeductions((prev) =>
+                      prev.map((x, idx) => (idx === i ? { ...x, fixed_paise: e.target.value } : x)),
+                    )
+                  }
+                  placeholder="flat paise (optional)"
+                  className="fc-numeric w-32 rounded-md border border-border bg-background p-1.5 text-xs"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex items-center gap-2.5">
+            <button
+              type="button"
+              disabled={submittingVersion}
+              onClick={submitNewVersion}
+              className="rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50"
+            >
+              {submittingVersion ? "Creating…" : `Create v${latest.version + 1} draft`}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftingVersion(false)}
+              className="rounded-lg border border-border px-4 py-2 text-[12.5px] font-semibold text-text-body"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-[1.4fr_1fr] gap-5">
         <div className="flex flex-col gap-5">

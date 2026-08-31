@@ -7,9 +7,14 @@ import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type EvalResult = components["schemas"]["EvalResultOut"];
 type ConfusionOut = components["schemas"]["ConfusionOut"];
+type CoverageCurveOut = components["schemas"]["CoverageCurveOut"];
+type CoveragePoint = { threshold: string; coverage: number; precision: number; false_positives: number; abstentions: number };
+type CategoryStat = { raised: number; gt_total: number; correct: number; precision: number; recall: number };
+type EvalBundle = { evalResult: EvalResult | null; confusion: ConfusionOut | null; coverageCurve: CoverageCurveOut | null };
 
 const STAGE_LABEL: Record<string, string> = {
   exact_ref: "Exact reference match",
@@ -21,20 +26,37 @@ const STAGE_LABEL: Record<string, string> = {
 
 export default function EvaluationPage() {
   const { summary } = useRun();
-  const [evalResult, setEvalResult] = useState<EvalResult | null | undefined>(undefined);
-  const [confusion, setConfusion] = useState<ConfusionOut | null>(null);
   const runId = summary?.run.run_id;
+  const cacheKey = runId ? `eval:${runId}` : null;
+  const cached = cacheGet<EvalBundle>(cacheKey);
+  const [evalResult, setEvalResult] = useState<EvalResult | null | undefined>(cached ? cached.evalResult : undefined);
+  const [confusion, setConfusion] = useState<ConfusionOut | null>(cached?.confusion ?? null);
+  const [coverageCurve, setCoverageCurve] = useState<CoverageCurveOut | null>(cached?.coverageCurve ?? null);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
+    const seeded = cacheGet<EvalBundle>(`eval:${runId}`);
+    if (seeded) {
+      setEvalResult(seeded.evalResult);
+      setConfusion(seeded.confusion);
+      setCoverageCurve(seeded.coverageCurve);
+    }
     Promise.all([
       apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }),
       apiClient.GET("/api/v1/eval/{run_id}/confusion", { params: { path: { run_id: runId } } }),
-    ]).then(([evalRes, confusionRes]) => {
+      apiClient.GET("/api/v1/eval/{run_id}/coverage-curve", { params: { path: { run_id: runId } } }),
+    ]).then(([evalRes, confusionRes, coverageRes]) => {
       if (cancelled) return;
-      setEvalResult(evalRes.data ?? null);
-      setConfusion(confusionRes.data ?? null);
+      const bundle: EvalBundle = {
+        evalResult: evalRes.data ?? null,
+        confusion: confusionRes.data ?? null,
+        coverageCurve: coverageRes.data ?? null,
+      };
+      cacheSet(`eval:${runId}`, bundle);
+      setEvalResult(bundle.evalResult);
+      setConfusion(bundle.confusion);
+      setCoverageCurve(bundle.coverageCurve);
     });
     return () => {
       cancelled = true;
@@ -128,6 +150,71 @@ export default function EvaluationPage() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="mb-5 grid grid-cols-[1.3fr_1fr] gap-5">
+            <div className="fc-card overflow-hidden">
+              <div className="border-b border-border px-5 py-3.5 text-sm font-semibold">
+                Coverage vs. precision, by auto-close threshold
+              </div>
+              {(!coverageCurve || coverageCurve.points.length === 0) && (
+                <div className="p-5 text-center text-sm text-text-muted">No curve points for this run.</div>
+              )}
+              {coverageCurve && coverageCurve.points.length > 0 && (
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[color:var(--neutral-bg)] text-[11px] font-semibold tracking-[0.03em] text-text-muted">
+                      <th className="px-5 py-2.5 text-left">THRESHOLD</th>
+                      <th className="px-3 py-2.5 text-right">COVERAGE</th>
+                      <th className="px-3 py-2.5 text-right">PRECISION</th>
+                      <th className="px-5 py-2.5 text-right">FALSE POS. / ABSTAIN</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(coverageCurve.points as CoveragePoint[]).map((p, i) => (
+                      <tr key={i} className="border-b border-[color:var(--neutral-bg)] text-[13px] last:border-0">
+                        <td className="fc-numeric px-5 py-2.5">{p.threshold}</td>
+                        <td className="fc-numeric px-3 py-2.5 text-right">{(p.coverage * 100).toFixed(1)}%</td>
+                        <td className="fc-numeric px-3 py-2.5 text-right">{(p.precision * 100).toFixed(1)}%</td>
+                        <td className="fc-numeric px-5 py-2.5 text-right text-text-muted">
+                          {p.false_positives} / {p.abstentions}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="fc-card overflow-hidden">
+              <div className="border-b border-border px-5 py-3.5 text-sm font-semibold">Precision &amp; recall by category</div>
+              {(!confusion || Object.keys(confusion.by_category ?? {}).length === 0) && (
+                <div className="p-5 text-center text-sm text-text-muted">No categories scored for this run.</div>
+              )}
+              {confusion && Object.entries(confusion.by_category ?? {}).length > 0 && (
+                <div className="flex flex-col">
+                  {Object.entries(confusion.by_category).map(([category, stat]) => {
+                    const s = stat as CategoryStat;
+                    return (
+                      <div
+                        key={category}
+                        className="flex items-center justify-between border-b border-[color:var(--neutral-bg)] px-5 py-3 text-[13px] last:border-0"
+                      >
+                        <div>
+                          <div>{category.replace(/_/g, " ")}</div>
+                          <div className="text-[11.5px] text-text-muted">
+                            {s.correct}/{s.raised} raised · {s.gt_total} in ground truth
+                          </div>
+                        </div>
+                        <div className="fc-numeric text-right text-xs text-text-muted">
+                          P {(s.precision * 100).toFixed(0)}% · R {(s.recall * 100).toFixed(0)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 

@@ -14,6 +14,8 @@ import {
   CircleHelp,
   Search,
   Bell,
+  Landmark,
+  ShieldCheck,
 } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { formatDurationMs, formatRunTimestamp } from "@/lib/format";
@@ -25,6 +27,8 @@ const WORKSPACE_NAV = [
   { href: "/rules", label: "Rule Book", icon: BookOpen },
   { href: "/activity", label: "Controller Activity", icon: Sparkles },
   { href: "/eval", label: "Evaluation", icon: Target },
+  { href: "/cash", label: "Cash", icon: Landmark },
+  { href: "/audit", label: "Audit Trail", icon: ShieldCheck },
 ];
 
 const DATA_NAV = [

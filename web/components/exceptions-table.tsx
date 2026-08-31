@@ -6,9 +6,11 @@ import { Landmark, Database, CreditCard } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, formatDecimalPercent, humanizeSnakeCase } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type ExceptionOut = components["schemas"]["Exception_"];
 type ClusterOut = components["schemas"]["Cluster"];
+type BulkActionKind = components["schemas"]["BulkAction"]["action"];
 
 const SOURCE_ICON: Record<string, typeof Landmark> = {
   bank: Landmark,
@@ -43,22 +45,28 @@ export function ExceptionsTable({
   limit,
   statusFilter,
   linkTo,
+  enableBulk,
 }: {
   runId: string;
   limit?: number;
   statusFilter?: "all" | "high" | "auto";
   linkTo?: (exceptionId: string) => string;
+  enableBulk?: boolean;
 }) {
+  const rowsCacheKey = `exceptions:${runId}:${limit ?? "all"}`;
   const [exceptions, setExceptions] = useState<ExceptionOut[] | null>(null);
   const [clusters, setClusters] = useState<ClusterOut[]>([]);
-  const [rows, setRows] = useState<Row[] | null>(null);
+  const [rows, setRows] = useState<Row[] | null>(() => cacheGet<Row[]>(rowsCacheKey) ?? null);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
+    const seeded = cacheGet<Row[]>(`exceptions:${runId}:${limit ?? "all"}`);
+    if (seeded) setRows(seeded);
     async function load() {
-      setRows(null);
       const [excRes, clusterRes] = await Promise.all([
         apiClient.GET("/api/v1/exceptions", {
           params: { query: { run_id: runId, status: "open", limit: 200 } },
@@ -77,7 +85,7 @@ export function ExceptionsTable({
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [runId, limit]);
 
   const clusterById = useMemo(
     () => new Map(clusters.map((c) => [c.cluster_id, c])),
@@ -97,31 +105,31 @@ export function ExceptionsTable({
         ),
       );
       if (cancelled) return;
-      setRows(
-        visible.map((exc, i) => {
-          const firstEvent = evidences[i].data?.events?.[0];
-          return {
-            exception: exc,
-            clusterLabel: exc.cluster_id
-              ? (clusterById.get(exc.cluster_id)?.label ?? humanizeSnakeCase(exc.category))
-              : humanizeSnakeCase(exc.category),
-            counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
-            source: firstEvent?.source ?? "razorpay",
-            reference:
-              firstEvent?.utr ??
-              firstEvent?.settlement_id ??
-              firstEvent?.order_id ??
-              firstEvent?.voucher_number ??
-              "—",
-          };
-        }),
-      );
+      const nextRows = visible.map((exc, i) => {
+        const firstEvent = evidences[i].data?.events?.[0];
+        return {
+          exception: exc,
+          clusterLabel: exc.cluster_id
+            ? (clusterById.get(exc.cluster_id)?.label ?? humanizeSnakeCase(exc.category))
+            : humanizeSnakeCase(exc.category),
+          counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
+          source: firstEvent?.source ?? "razorpay",
+          reference:
+            firstEvent?.utr ??
+            firstEvent?.settlement_id ??
+            firstEvent?.order_id ??
+            firstEvent?.voucher_number ??
+            "—",
+        };
+      });
+      cacheSet(`exceptions:${runId}:${limit ?? "all"}`, nextRows);
+      setRows(nextRows);
     }
     void loadEvidence();
     return () => {
       cancelled = true;
     };
-  }, [exceptions, clusterById, limit]);
+  }, [exceptions, clusterById, limit, runId]);
 
   const filtered = (rows ?? []).filter((r) => {
     if (!statusFilter || statusFilter === "all") return true;
@@ -132,11 +140,82 @@ export function ExceptionsTable({
   if (error) return <div className="fc-card p-4 text-sm text-amber-text">{error}</div>;
   if (!rows) return <div className="fc-card h-64 animate-pulse" aria-hidden />;
 
+  function toggleAll() {
+    setSelected((prev) =>
+      prev.size === filtered.length ? new Set() : new Set(filtered.map((r) => r.exception.exception_id)),
+    );
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function runBulk(action: BulkActionKind) {
+    const reason = window.prompt(`Reason to ${action.replace("_", " ")} ${selected.size} exception(s):`);
+    if (!reason?.trim()) return;
+    setBulkSubmitting(true);
+    const exceptionIds = Array.from(selected);
+    const { data } = await apiClient.POST("/api/v1/exceptions/bulk", {
+      body: { exception_ids: exceptionIds, action, reason: reason.trim() },
+    });
+    setBulkSubmitting(false);
+    if (!data) return;
+    const okIds = new Set(data.results.filter((r) => r.ok).map((r) => r.exception_id));
+    setExceptions((prev) => (prev ?? []).filter((e) => !okIds.has(e.exception_id)));
+    setSelected(new Set());
+  }
+
   return (
     <div className="fc-card overflow-hidden">
+      {enableBulk && selected.size > 0 && (
+        <div className="flex items-center justify-between border-b border-border bg-primary-tint px-5 py-2.5 text-[12.5px]">
+          <span className="font-semibold text-primary-active-text">{selected.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={bulkSubmitting}
+              onClick={() => runBulk("resolve")}
+              className="rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success disabled:opacity-50"
+            >
+              Resolve
+            </button>
+            <button
+              type="button"
+              disabled={bulkSubmitting}
+              onClick={() => runBulk("write_off")}
+              className="rounded-[7px] border border-border px-3 py-1.5 text-xs font-semibold text-text-body disabled:opacity-50"
+            >
+              Write off
+            </button>
+            <button
+              type="button"
+              disabled={bulkSubmitting}
+              onClick={() => runBulk("escalate")}
+              className="rounded-[7px] bg-error-bg px-3 py-1.5 text-xs font-semibold text-error disabled:opacity-50"
+            >
+              Escalate
+            </button>
+          </div>
+        </div>
+      )}
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-b border-[color:var(--neutral-bg)] text-[11px] font-semibold tracking-[0.03em] text-text-muted">
+            {enableBulk && (
+              <th className="w-9 px-5 py-2.5 text-left">
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && selected.size === filtered.length}
+                  onChange={toggleAll}
+                  aria-label="Select all"
+                />
+              </th>
+            )}
             <th className="px-5 py-2.5 text-left">COUNTERPARTY</th>
             <th className="px-3 py-2.5 text-left">EXCEPTION</th>
             <th className="px-3 py-2.5 text-left">CAUSE CLUSTER</th>
@@ -160,6 +239,16 @@ export function ExceptionsTable({
                   (href ? " cursor-pointer hover:bg-neutral-bg" : "")
                 }
               >
+                {enableBulk && (
+                  <td className="w-9 px-5 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(row.exception.exception_id)}
+                      onChange={() => toggleOne(row.exception.exception_id)}
+                      aria-label={`Select ${row.counterparty}`}
+                    />
+                  </td>
+                )}
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2.5">
                     <span

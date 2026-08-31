@@ -50,6 +50,7 @@ export function ExceptionsScreen({ activeId }: { activeId?: string }) {
         runId={runId}
         statusFilter={status}
         linkTo={(id) => `/exceptions/${id}${status !== "all" ? `?status=${status}` : ""}`}
+        enableBulk
       />
       {activeId && (
         <div className="mt-5">

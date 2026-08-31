@@ -9,10 +9,12 @@ import { FilterPills } from "@/components/ui/filter-pills";
 import { StatusPill } from "@/components/ui/status-pill";
 import { RuleAuthoringForm, type RuleSubmitPayload } from "@/components/rule-authoring-form";
 import { BacktestDialog } from "@/components/backtest-dialog";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type Rule = components["schemas"]["Rule"];
 type SuggestionOut = components["schemas"]["SuggestionOut"];
 type BacktestOut = components["schemas"]["BacktestOut"];
+type RulesBundle = { rules: Rule[]; suggestions: SuggestionOut[] };
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -23,8 +25,9 @@ const FILTERS = [
 
 export default function RuleBookPage() {
   const router = useRouter();
-  const [rules, setRules] = useState<Rule[] | null>(null);
-  const [suggestions, setSuggestions] = useState<SuggestionOut[]>([]);
+  const cached = cacheGet<RulesBundle>("rules");
+  const [rules, setRules] = useState<Rule[] | null>(cached?.rules ?? null);
+  const [suggestions, setSuggestions] = useState<SuggestionOut[]>(cached?.suggestions ?? []);
   const [affected, setAffected] = useState<Record<string, BacktestOut>>({});
   const [status, setStatus] = useState("all");
   const [creating, setCreating] = useState(false);
@@ -35,14 +38,21 @@ export default function RuleBookPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const seeded = cacheGet<RulesBundle>("rules");
+    if (seeded && reloadKey === 0) {
+      setRules(seeded.rules);
+      setSuggestions(seeded.suggestions);
+    }
     async function load() {
       const [rulesRes, suggestionsRes] = await Promise.all([
         apiClient.GET("/api/v1/rules", { params: { query: {} } }),
         apiClient.GET("/api/v1/rules/suggestions", {}),
       ]);
       if (cancelled) return;
-      setRules(rulesRes.data ?? []);
-      setSuggestions(suggestionsRes.data ?? []);
+      const bundle: RulesBundle = { rules: rulesRes.data ?? [], suggestions: suggestionsRes.data ?? [] };
+      cacheSet("rules", bundle);
+      setRules(bundle.rules);
+      setSuggestions(bundle.suggestions);
     }
     void load();
     return () => {
