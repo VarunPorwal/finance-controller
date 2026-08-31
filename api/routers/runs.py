@@ -363,6 +363,12 @@ def _persist_pipeline_result(
                 recheck_at=exc.recheck_at,
                 recheck_count=exc.recheck_count,
                 status=exc.status,
+                # The lifecycle fields the engine set alongside status. Dropping
+                # them wrote an auto-resolved exception with resolved_by NULL,
+                # so the row said "resolved" with no record of who or why.
+                resolved_by=exc.resolved_by,
+                resolved_at=exc.resolved_at,
+                resolution_reason=exc.resolution_reason,
                 signature=exc.signature,
                 created_at=exc.created_at,
             )
