@@ -6,6 +6,7 @@ import { formatPaise } from "@/lib/format";
 
 type ParseOut = components["schemas"]["ParseOut"];
 type ExecuteOut = components["schemas"]["ExecuteOut"];
+type Refusal = { code: string; message: string; candidates: string[] };
 
 /**
  * PRD §8.3–§8.6. The loop the whole product is for: a person says what an
@@ -44,7 +45,7 @@ export function InstructionBox({
   const [acknowledged, setAcknowledged] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<ExecuteOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Refusal | null>(null);
 
   function reset() {
     setParsed(null);
@@ -54,11 +55,37 @@ export function InstructionBox({
     setError(null);
   }
 
-  function detailOf(err: unknown, status: number): string {
-    if (err && typeof err === "object" && "detail" in err) {
-      return String((err as { detail?: unknown }).detail);
+  /** A push-back the API returned as a 4xx rather than inside the preview.
+   *
+   * §8.5's "referenced order/voucher not found" arrives as a 422 whose body
+   * carries `title`, `detail` and `candidates` — the same shape as a
+   * `RefusalOut`, just delivered as an error. Rendering only `detail` would
+   * drop the candidate list, which is the half that matters: the agent is
+   * supposed to show the near matches and decline to pick one.
+   */
+  function refusalFromError(err: unknown, status: number): Refusal {
+    if (err && typeof err === "object") {
+      const body = err as {
+        title?: unknown;
+        detail?: unknown;
+        candidates?: unknown;
+      };
+      const candidates = Array.isArray(body.candidates)
+        ? body.candidates.map((c) => String(c))
+        : [];
+      if (body.detail !== undefined) {
+        return {
+          code: String(body.title ?? "refused"),
+          message: String(body.detail),
+          candidates,
+        };
+      }
     }
-    return `request failed (${status})`;
+    return {
+      code: "error",
+      message: `request failed (${status})`,
+      candidates: [],
+    };
   }
 
   async function parse() {
@@ -75,12 +102,16 @@ export function InstructionBox({
         body: { text: trimmed, context: { exception_id: exceptionId } },
       });
       if (parseError || !data) {
-        setError(detailOf(parseError, response.status));
+        setError(refusalFromError(parseError, response.status));
         return;
       }
       setParsed(data);
     } catch {
-      setError("Could not reach the API.");
+      setError({
+        code: "network",
+        message: "Could not reach the API.",
+        candidates: [],
+      });
     } finally {
       setParsing(false);
     }
@@ -105,7 +136,7 @@ export function InstructionBox({
         },
       });
       if (execError || !data) {
-        setError(detailOf(execError, response.status));
+        setError(refusalFromError(execError, response.status));
         return;
       }
       setResult(data);
@@ -113,7 +144,11 @@ export function InstructionBox({
       setParsed(null);
       onApplied();
     } catch {
-      setError("Could not reach the API.");
+      setError({
+        code: "network",
+        message: "Could not reach the API.",
+        candidates: [],
+      });
     } finally {
       setExecuting(false);
     }
@@ -163,11 +198,7 @@ export function InstructionBox({
         </button>
       </div>
 
-      {error && (
-        <p role="alert" className="text-sig-amber mt-3 text-sm">
-          {error}
-        </p>
-      )}
+      {error && <RefusalBlock refusal={error} />}
 
       {parsed?.parse_unavailable && (
         <div className="border-rule bg-ink-900 mt-3 rounded-md border p-3 text-sm">
@@ -181,26 +212,7 @@ export function InstructionBox({
         </div>
       )}
 
-      {refusal && (
-        <div className="border-sig-red/40 bg-sig-red/10 mt-3 rounded-md border p-3 text-sm">
-          <p className="text-sig-red font-heading font-semibold">
-            Not doing that
-          </p>
-          <p className="text-paper-100 mt-1">{refusal.message}</p>
-          {refusal.candidates.length > 0 && (
-            <>
-              <p className="text-paper-300 mt-2 text-xs">
-                Closest matches — none has been chosen for you:
-              </p>
-              <ul className="fc-numeric text-paper-300 mt-1 space-y-0.5 text-xs">
-                {refusal.candidates.map((c) => (
-                  <li key={c}>{c}</li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
+      {refusal && <RefusalBlock refusal={refusal} />}
 
       {preview && !refusal && (
         <div className="border-rule bg-ink-900 mt-3 space-y-3 rounded-md border p-3">
@@ -322,6 +334,30 @@ export function InstructionBox({
             </>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function RefusalBlock({ refusal }: { refusal: Refusal }) {
+  return (
+    <div
+      role="alert"
+      className="border-sig-red/40 bg-sig-red/10 mt-3 rounded-md border p-3 text-sm"
+    >
+      <p className="text-sig-red font-heading font-semibold">Not doing that</p>
+      <p className="text-paper-100 mt-1">{refusal.message}</p>
+      {refusal.candidates.length > 0 && (
+        <>
+          <p className="text-paper-300 mt-2 text-xs">
+            Closest matches — none has been chosen for you:
+          </p>
+          <ul className="fc-numeric text-paper-300 mt-1 space-y-0.5 text-xs">
+            {refusal.candidates.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
