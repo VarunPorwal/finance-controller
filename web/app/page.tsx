@@ -11,7 +11,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
-import { TrendBars } from "@/components/ui/trend-bars";
+import { InteractiveTrendChart } from "@/components/ui/interactive-trend-chart";
 import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
@@ -188,7 +188,10 @@ export default function ReconcileHome() {
             </div>
             <div className="px-[22px] pt-3.5 pb-5">
               {history.length > 0 ? (
-                <TrendBars points={history.map((h) => ({ label: h.label, value: h.eventCount }))} color="var(--primary)" />
+                <InteractiveTrendChart
+                  points={history.map((h) => ({ label: h.label, value: h.eventCount }))}
+                  color="var(--primary)"
+                />
               ) : (
                 <div className="rounded-[10px] border border-dashed border-border p-6 text-center text-[13px] text-text-muted">
                   No completed runs yet — this fills in after your first run.
@@ -231,7 +234,11 @@ export default function ReconcileHome() {
               <div className="fc-numeric text-[22px] font-semibold">{autoMatched}</div>
               {history.length > 0 ? (
                 <div className="mt-3">
-                  <TrendBars points={history.map((h) => ({ label: h.label, value: h.autoMatched }))} color="var(--success)" />
+                  <InteractiveTrendChart
+                    points={history.map((h) => ({ label: h.label, value: h.autoMatched }))}
+                    color="var(--success)"
+                    height={110}
+                  />
                 </div>
               ) : (
                 <div className="mt-4 rounded-[10px] border border-dashed border-border p-4 text-center text-xs text-text-muted">
