@@ -40,6 +40,7 @@ __all__ = [
     "notify_deadline_reminder",
     "notify_escalation",
     "notify_rule_suggestion",
+    "notify_run_complete",
 ]
 
 _LOG = logging.getLogger("fc.notify")
@@ -134,6 +135,52 @@ async def notify_rule_suggestion(
             f"<p><strong>{name}</strong> explains a pattern seen {occurrences} times.</p>"
             "<p>It is a draft and explains nothing until it has been back-tested "
             "against history and activated — in that order.</p>"
+        ),
+        to=to,
+    )
+
+
+async def notify_run_complete(
+    cfg: Config,
+    *,
+    run_id: str,
+    headline: str,
+    records_processed: int,
+    settled_automatically: int,
+    needing_attention: int,
+    false_auto_resolutions: int,
+    top_exceptions: Sequence[dict[str, object]],
+    app_url: str,
+    to: str | Sequence[str] | None = None,
+) -> None:
+    """The "email me when a run finishes" toggle (Reconcile screen).
+
+    ``top_exceptions`` entries carry ``category`` (str), ``amount_paise``
+    (int) and ``deadline`` (``date | None``) — the top 5 by amount, already
+    selected by the caller; this function only renders them.
+    """
+    rows = "".join(
+        f"<tr><td>{html.escape(str(item.get('category', '')))}</td>"
+        f"<td>{fmt_inr(int(item['amount_paise']))}</td>"  # type: ignore[arg-type]
+        f"<td>{html.escape(str(item['deadline'])) if item.get('deadline') else '—'}</td></tr>"
+        for item in top_exceptions
+    )
+    await _send(
+        cfg,
+        subject=f"Reconciliation complete — {html.escape(headline)}",
+        html_body=(
+            f"<p><strong>{html.escape(headline)}</strong></p>"
+            "<ul>"
+            f"<li>Records processed: {records_processed}</li>"
+            f"<li>Settled automatically: {settled_automatically}</li>"
+            f"<li>Needing attention: {needing_attention}</li>"
+            f"<li>False auto-resolutions: {false_auto_resolutions}</li>"
+            "</ul>"
+            "<p><strong>Top exceptions by amount</strong></p>"
+            "<table cellpadding=\"4\"><tr><th>Category</th><th>Amount</th><th>Deadline</th></tr>"
+            f"{rows}</table>"
+            f"<p><a href=\"{html.escape(app_url)}\">Open the app</a></p>"
+            f"<p style=\"color:#888;font-size:12px\">run_id: {html.escape(run_id)}</p>"
         ),
         to=to,
     )

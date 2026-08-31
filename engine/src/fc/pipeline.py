@@ -65,6 +65,12 @@ PIPELINE_STAGES: Final[tuple[str, ...]] = (
 #: here too: change both sides in the same commit).
 _SETTLEMENT_RECEIPT_REF = re.compile(r"Settlement credit (\S+)")
 
+#: PRD §4.1.6's 7 voucher types, minus the 5 that never touch the bank
+#: ledger. Sales, Journal, Credit Note, Debit Note and Contra are the contra
+#: side of double entry — they cannot match a bank line and are excluded
+#: from matching (not deleted; see `run_pipeline`).
+_BANK_MOVEMENT_VOUCHER_TYPES = frozenset({"Receipt", "Payment"})
+
 #: Same marker ``fc.cash.bridge`` matches in a settlement-line-item
 #: adjustment row's ``description`` (PRD §4.1.7). Duplicated rather than
 #: imported: the two modules are asking different questions of the same
@@ -143,8 +149,16 @@ def run_pipeline(
     clock, so a seeded run is byte-identical (CLAUDE.md hard rule 9).
     """
     events = tuple(events)
+    # Only Receipt and Payment vouchers move the bank account; Sales, Journal,
+    # Credit Note, Debit Note and Contra are the contra side of double entry
+    # and can never match a bank line. Feeding those to the cascade made every
+    # one of them a false "missing in bank"/"missing in gateway" exception.
+    # They stay in `events` (and therefore in `by_id` below and in the
+    # persisted corpus) so anything explaining a decision can still look them
+    # up — they are excluded from matching, not deleted.
+    reconcilable = tuple(e for e in events if e.source != "ledger" or e.voucher_type in _BANK_MOVEMENT_VOUCHER_TYPES)
     cascade = run_cascade(
-        events,
+        reconcilable,
         cfg=cfg,
         run_id=run_id,
         tenant_id=tenant_id,
@@ -154,7 +168,7 @@ def run_pipeline(
 
     rule_gaps = _all_rule_gaps(events, rules, cfg=cfg, aliases=aliases)
 
-    classified = classify_exceptions(events, cascade, rule_gaps=rule_gaps)
+    classified = classify_exceptions(reconcilable, cascade, rule_gaps=rule_gaps)
     tier_decisions = [
         tier_for(
             item.category,
@@ -239,7 +253,7 @@ def run_pipeline(
             )
         )
 
-    cash_bridge = compute_cash_bridge(events, exceptions)
+    cash_bridge = compute_cash_bridge(events, exceptions, cascade.matches)
 
     return PipelineResult(
         events=events,

@@ -28,6 +28,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from fc.models.exception_ import Exception_
+from fc.models.match import MatchResult
 from fc.models.transaction import TransactionEvent
 
 __all__ = ["BridgeSegment", "CashBridge", "compute_cash_bridge"]
@@ -82,9 +83,20 @@ class BridgeSegment:
 @dataclass(frozen=True)
 class CashBridge:
     gross_collected_paise: int
+    #: The razorpay payment-credit rows that sum to `gross_collected_paise`.
+    #: Carried the same way `BridgeSegment.event_ids` is, so a click on
+    #: "Gross settled" can show the rows behind it.
+    gross_event_ids: tuple[str, ...]
     deductions: tuple[BridgeSegment, ...]
     expected_net_paise: int
     actual_bank_paise: int
+    #: The bank rows that sum to `actual_bank_paise` — only ones the matcher
+    #: attributed to the gateway (part of a match whose `sources_covered`
+    #: includes both "bank" and "razorpay"). A real merchant's statement has
+    #: salary, rent, vendor payments and GST challans on the same account;
+    #: netting the *whole* statement against gateway gross produced a
+    #: meaningless gap the moment a corpus had any of those.
+    actual_bank_event_ids: tuple[str, ...]
     unexplained_paise: int
     #: Every deduction plus the terminal "Unexplained" line, in bridge order.
     segments: tuple[BridgeSegment, ...]
@@ -108,16 +120,30 @@ def _attribute(
 
 
 def compute_cash_bridge(
-    events: Sequence[TransactionEvent], exceptions: Sequence[Exception_]
+    events: Sequence[TransactionEvent],
+    exceptions: Sequence[Exception_],
+    matches: Sequence[MatchResult],
 ) -> CashBridge:
     """Build the bridge for one run.
 
-    ``events`` is the whole ingested corpus, not just what matched — the
-    bridge is a books-level question ("sales were booked at gross, the bank
-    paid net, what happened to the difference"), independent of what the
-    matching cascade did or didn't prove (CLAUDE.md: "the Rulebook's gap is
-    not the cascade's gap" applies here too, for the same reason).
+    The gross/deduction side of the bridge (razorpay rows) is still read
+    straight off the whole ingested corpus — "sales were booked at gross,
+    what did the gateway deduct" does not depend on what the matching
+    cascade proved (CLAUDE.md: "the Rulebook's gap is not the cascade's
+    gap" applies here too, for the same reason).
+
+    ``actual_bank_paise`` is different: a bank statement carries salary,
+    rent, vendor payments, ad spend and GST challans alongside gateway
+    settlements, and none of those are the bank's side of *this* bridge. Only
+    bank rows the matcher actually attributed to the gateway — part of a
+    match whose ``sources_covered`` includes both ``bank`` and ``razorpay``
+    — count here; everything else on the statement is out of scope for this
+    question, not evidence of a gap.
     """
+    gateway_matched_bank_ids: set[str] = set()
+    for m in matches:
+        if "bank" in m.sources_covered and "razorpay" in m.sources_covered:
+            gateway_matched_bank_ids.update(m.event_ids)
     gross_paise = 0
     mdr_paise = 0
     gst_paise = 0
@@ -164,11 +190,13 @@ def compute_cash_bridge(
             chargeback_ids.append(event.event_id)
 
     actual_bank_paise = 0
+    actual_bank_ids: list[str] = []
     for event in events:
-        if event.source != "bank":
+        if event.source != "bank" or event.event_id not in gateway_matched_bank_ids:
             continue
         sign = 1 if event.direction == "credit" else -1
         actual_bank_paise += sign * event.amount_paise
+        actual_bank_ids.append(event.event_id)
 
     reserve_net_paise = reserve_hold_paise - reserve_release_paise
     expected_net_paise = (
@@ -238,9 +266,11 @@ def compute_cash_bridge(
 
     return CashBridge(
         gross_collected_paise=gross_paise,
+        gross_event_ids=tuple(payment_event_ids),
         deductions=deductions,
         expected_net_paise=expected_net_paise,
         actual_bank_paise=actual_bank_paise,
+        actual_bank_event_ids=tuple(actual_bank_ids),
         unexplained_paise=unexplained_paise,
         segments=segments,
         cash_at_risk_paise=cash_at_risk_paise,

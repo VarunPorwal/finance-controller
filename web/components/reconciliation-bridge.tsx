@@ -56,9 +56,25 @@ export function ReconciliationBridge({
   const gapNonZero = bridge.unexplained_paise !== 0;
 
   const segments = [
-    { key: "gross", color: "var(--primary)", iconBg: "var(--primary-tint)", amount: formatPaiseWhole(bridge.gross_collected_paise), caption: "Gross settled" },
+    {
+      key: "gross",
+      color: "var(--primary)",
+      iconBg: "var(--primary-tint)",
+      amount: formatPaiseWhole(bridge.gross_collected_paise),
+      caption: "Gross settled",
+      onEnter: () => onHoverSegment(bridge.gross_event_ids),
+      onLeave: () => onHoverSegment(null),
+    },
     { key: "fees", color: "var(--text-body)", iconBg: "var(--neutral-bg)", amount: `−${formatPaiseWhole(deductionTotalPaise)}`, caption: "Fees, GST, TDS, reserve", onEnter: () => onHoverSegment(deductionEventIds), onLeave: () => onHoverSegment(null) },
-    { key: "credited", color: "var(--success)", iconBg: "var(--success-bg)", amount: formatPaiseWhole(bridge.actual_bank_paise), caption: "Credited to bank" },
+    {
+      key: "credited",
+      color: "var(--success)",
+      iconBg: "var(--success-bg)",
+      amount: formatPaiseWhole(bridge.actual_bank_paise),
+      caption: "Credited to bank",
+      onEnter: () => onHoverSegment(bridge.actual_bank_event_ids),
+      onLeave: () => onHoverSegment(null),
+    },
     {
       key: "gap",
       color: gapNonZero ? "var(--amber-text)" : "var(--success)",

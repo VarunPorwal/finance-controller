@@ -41,6 +41,7 @@ from api.routers import (
     meta,
     rules,
     runs,
+    settings as settings_router,
 )
 from api.routers import eval as eval_router
 from api.ruleset import seed_rules_from_yaml
@@ -124,6 +125,7 @@ app.include_router(audit.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
+app.include_router(settings_router.router, prefix="/api/v1")
 
 
 def main(argv: list[str] | None = None) -> int:

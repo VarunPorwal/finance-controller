@@ -11,6 +11,7 @@ same as every other adapter in this codebase already returns them inline.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -50,6 +51,8 @@ from fc.models.ids import deterministic_factory, new_ulid
 from fc.models.transaction import TransactionEvent
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+_LOG = logging.getLogger("fc.ingest.api")
 
 #: Rows per INSERT. 34 columns x 500 = 17k bind parameters, well under
 #: PostgreSQL's 65535 ceiling.
@@ -288,6 +291,7 @@ async def _persist(
         }
         for event in events
     ]
+    returned_ids: set[str] = set()
     for start in range(0, len(rows), _INSERT_CHUNK):
         chunk = rows[start : start + _INSERT_CHUNK]
         stmt = (
@@ -296,7 +300,25 @@ async def _persist(
             .on_conflict_do_nothing()
             .returning(TransactionEventRow.event_id)
         )
-        inserted += len((await session.execute(stmt)).scalars().all())
+        returned_ids.update((await session.execute(stmt)).scalars().all())
+
+    inserted = len(returned_ids)
+    # Every row `ON CONFLICT DO NOTHING` silently skipped used to be a bare
+    # count (`deduplicated = len(events) - inserted`) — which entity_id
+    # collided and why was unrecoverable after the fact. Log each one: it is
+    # the only place this information exists, since the row is never
+    # persisted (CLAUDE.md: dedupes on `(run_id, source, source_row_id)` /
+    # `(run_id, voucher_guid)`, not `payment_id` — a chargeback and its
+    # reversal share a payment_id, so deduping on that would have silently
+    # collapsed them).
+    for row in rows:
+        if row["event_id"] not in returned_ids:
+            _LOG.info(
+                "ingest dedupe skipped entity_id=%s source=%s reason=already present for "
+                "(run_id, source, source_row_id) or (run_id, voucher_guid)",
+                row["source_row_id"],
+                row["source"],
+            )
 
     run.record_count = (run.record_count or 0) + inserted
     await session.flush()

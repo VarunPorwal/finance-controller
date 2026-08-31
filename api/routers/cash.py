@@ -11,11 +11,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.converters import event_from_row, exception_from_row
+from api.converters import event_from_row, exception_from_row, match_from_row
 from api.deps import db_session
 from api.errors import ApiError
 from api.run_scope import event_source_run_id
 from db.models import ExceptionRow, TransactionEventRow
+from db.models import Match as MatchRow
 from fc.cash.bridge import CashBridge, compute_cash_bridge
 
 router = APIRouter(prefix="/cash", tags=["cash"])
@@ -42,9 +43,11 @@ class CashBridgeOut(BaseModel):
 
     run_id: str
     gross_collected_paise: int
+    gross_event_ids: list[str]
     deductions: list[BridgeSegmentOut]
     expected_net_paise: int
     actual_bank_paise: int
+    actual_bank_event_ids: list[str]
     unexplained_paise: int
     segments: list[BridgeSegmentOut]
     cash_at_risk_paise: int
@@ -66,9 +69,11 @@ def _bridge_out(run_id: str, bridge: CashBridge) -> CashBridgeOut:
     return CashBridgeOut(
         run_id=run_id,
         gross_collected_paise=bridge.gross_collected_paise,
+        gross_event_ids=list(bridge.gross_event_ids),
         deductions=[_segment_out(s) for s in bridge.deductions],
         expected_net_paise=bridge.expected_net_paise,
         actual_bank_paise=bridge.actual_bank_paise,
+        actual_bank_event_ids=list(bridge.actual_bank_event_ids),
         unexplained_paise=bridge.unexplained_paise,
         segments=[_segment_out(s) for s in bridge.segments],
         cash_at_risk_paise=bridge.cash_at_risk_paise,
@@ -91,8 +96,13 @@ async def _compute(session: AsyncSession, run_id: str) -> CashBridge:
     exceptions = (
         await session.scalars(select(ExceptionRow).where(ExceptionRow.run_id == run_id))
     ).all()
+    matches = (
+        await session.scalars(select(MatchRow).where(MatchRow.run_id == run_id))
+    ).all()
     return compute_cash_bridge(
-        [event_from_row(e) for e in events], [exception_from_row(x) for x in exceptions]
+        [event_from_row(e) for e in events],
+        [exception_from_row(x) for x in exceptions],
+        [match_from_row(m) for m in matches],
     )
 
 

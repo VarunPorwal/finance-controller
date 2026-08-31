@@ -13,6 +13,7 @@ import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { InteractiveTrendChart } from "@/components/ui/interactive-trend-chart";
+import { EmailToggle } from "@/components/email-toggle";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
 interface HistoryPoint {
@@ -119,6 +120,7 @@ export default function ReconcileHome() {
       <div className="mb-5 flex items-center justify-between">
         <div className="text-2xl font-semibold tracking-[-0.025em]">Reconciliation</div>
         <div className="flex items-center gap-2.5">
+          <EmailToggle />
           <button type="button" className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-[12.5px] font-medium text-text-heading">
             <Download width={15} height={15} />
             Export

@@ -1414,6 +1414,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Settings */
+        patch: operations["update_settings_api_v1_settings_patch"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1422,6 +1440,18 @@ export interface components {
         ActivateRequest: {
             /** Reason */
             reason: string;
+        };
+        /** TenantSettingsOut */
+        TenantSettingsOut: {
+            /** Email On Run Complete */
+            email_on_run_complete: boolean;
+            /** Email Last Sent At */
+            email_last_sent_at?: string | null;
+        };
+        /** TenantSettingsUpdate */
+        TenantSettingsUpdate: {
+            /** Email On Run Complete */
+            email_on_run_complete: boolean;
         };
         /** AppliedOut */
         AppliedOut: {
@@ -1656,12 +1686,16 @@ export interface components {
             run_id: string;
             /** Gross Collected Paise */
             gross_collected_paise: number;
+            /** Gross Event Ids */
+            gross_event_ids: string[];
             /** Deductions */
             deductions: components["schemas"]["BridgeSegmentOut"][];
             /** Expected Net Paise */
             expected_net_paise: number;
             /** Actual Bank Paise */
             actual_bank_paise: number;
+            /** Actual Bank Event Ids */
+            actual_bank_event_ids: string[];
             /** Unexplained Paise */
             unexplained_paise: number;
             /** Segments */
@@ -5833,6 +5867,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["api__routers__agent__HealthOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantSettingsOut"];
+                };
+            };
+        };
+    };
+    update_settings_api_v1_settings_patch: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenantSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantSettingsOut"];
                 };
             };
             /** @description Validation Error */

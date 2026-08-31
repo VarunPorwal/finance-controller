@@ -45,11 +45,12 @@ from api.deps import (
 )
 from api.errors import ApiError
 from api.generation import generate_for_run
+from api.notify import notify_run_complete
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
 from api.ruleset import COMPOSITION_KEY, resolve_ruleset
 from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
-from db.models import EvalResult, ExceptionRow, Run, TransactionEventRow
+from db.models import EvalResult, ExceptionRow, Run, Tenant, TransactionEventRow, User
 from db.models import Match as MatchRow
 from fc.audit.replay import ReplayDiff, diff_exceptions, replay
 from fc.config import Config
@@ -57,6 +58,7 @@ from fc.eval.corpus import load_corpus
 from fc.eval.report import SHIPPED_AUTO_THRESHOLD, EvalReport, GateResult, check_gates, evaluate
 from fc.llm.client import LLMClient
 from fc.models.ids import deterministic_factory, new_ulid
+from fc.models.money import fmt_inr
 from fc.pipeline import PIPELINE_STAGES, PipelineResult, run_pipeline
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -498,6 +500,84 @@ def _persist_eval_result(
     )
 
 
+_EMAIL_ROLES = ("finance_manager", "finance_exec")
+
+
+async def _maybe_email_run_complete(
+    session: AsyncSession,
+    *,
+    cfg: Config,
+    tenant_id: str,
+    run_id: str,
+    finished_at: datetime,
+    result: PipelineResult,
+    false_auto_resolutions: int = 0,
+) -> None:
+    """The "email me when a run finishes" toggle (Reconcile screen),
+    persisted in ``tenants.settings`` and off by default.
+
+    Fire-and-forget in the literal sense: the Resend call is scheduled as a
+    detached task rather than awaited, so a slow or hung send (up to
+    ``api.notify._SEND_TIMEOUT_SECONDS``) can never delay the response that
+    completed the run, and ``api.notify._send`` never raises past its own
+    boundary regardless.
+    """
+    tenant = await session.get(Tenant, tenant_id)
+    if tenant is None:
+        return
+    settings = dict(tenant.settings or {})
+    if not settings.get("email_on_run_complete", False):
+        return
+
+    recipients = (
+        await session.scalars(
+            select(User.email).where(
+                User.tenant_id == tenant_id,
+                User.role.in_(_EMAIL_ROLES),
+                User.status == "active",
+            )
+        )
+    ).all()
+    if not recipients:
+        return
+
+    needing_attention = sum(1 for e in result.exceptions if e.tier != "auto")
+    settled_automatically = len(result.events) - len(result.exceptions)
+    deadlines = [e.deadline for e in result.exceptions if e.deadline is not None]
+    headline = (
+        f"{needing_attention} item{'s' if needing_attention != 1 else ''} need your decision, "
+        f"{fmt_inr(result.cash_bridge.unexplained_paise)} unexplained"
+    )
+    if deadlines:
+        days = (min(deadlines) - finished_at.date()).days
+        headline += f", first deadline in {days} day{'s' if days != 1 else ''}"
+
+    top = sorted(result.exceptions, key=lambda e: e.amount_paise, reverse=True)[:5]
+    top_exceptions: list[dict[str, object]] = [
+        {"category": e.category, "amount_paise": e.amount_paise, "deadline": e.deadline}
+        for e in top
+    ]
+
+    asyncio.create_task(
+        notify_run_complete(
+            cfg,
+            run_id=run_id,
+            headline=headline,
+            records_processed=len(result.events),
+            settled_automatically=settled_automatically,
+            needing_attention=needing_attention,
+            false_auto_resolutions=false_auto_resolutions,
+            top_exceptions=top_exceptions,
+            app_url=cfg.frontend_origin or "http://localhost:3000",
+            to=list(recipients),
+        )
+    )
+
+    settings["email_last_sent_at"] = finished_at.isoformat()
+    tenant.settings = settings
+    await session.flush()
+
+
 @router.post("", response_model=RunOut)
 async def create_run(
     body: CreateRunRequest,
@@ -642,6 +722,15 @@ async def create_run(
     if not dry_run:
         await generate_for_run(session, run_id=run_id, tenant_id=user.tenant_id, client=client)
         await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+        await _maybe_email_run_complete(
+            session,
+            cfg=cfg,
+            tenant_id=user.tenant_id,
+            run_id=run_id,
+            finished_at=finished_at,
+            result=result,
+            false_auto_resolutions=eval_report.false_auto_resolutions,
+        )
 
     result_out = _run_out(run_row)
     await finish(session, dry_run=dry_run)
@@ -724,6 +813,14 @@ async def finalize_run(
     if not dry_run:
         await generate_for_run(session, run_id=run_id, tenant_id=user.tenant_id, client=client)
         await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+        await _maybe_email_run_complete(
+            session,
+            cfg=cfg,
+            tenant_id=user.tenant_id,
+            run_id=run_id,
+            finished_at=finished_at,
+            result=result,
+        )
 
     result_out = _run_out(run_row)
     await finish(session, dry_run=dry_run)
