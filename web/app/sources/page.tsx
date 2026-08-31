@@ -15,7 +15,10 @@ type SourcesBundle = { counts: EventCount | null; history: AuditEvent[] };
 const CONNECTORS = [
   { key: "razorpay", name: "Razorpay", icon: CreditCard, iconBg: "var(--primary-tint)", iconColor: "var(--primary)" },
   { key: "bank", name: "HDFC Bank", icon: Landmark, iconBg: "var(--amber-bg)", iconColor: "var(--amber-text)" },
-  { key: "tally", name: "Tally", icon: Database, iconBg: "var(--success-bg)", iconColor: "var(--success)" },
+  // Ledger rows are stored with source="ledger" (fc/ingest/tally.py), not
+  // "tally" — the connector is still labeled Tally, but the lookup key into
+  // by_source has to match what the ingest pipeline actually wrote.
+  { key: "ledger", name: "Tally", icon: Database, iconBg: "var(--success-bg)", iconColor: "var(--success)" },
 ];
 
 export async function fetchSourcesBundle(runId: string): Promise<SourcesBundle> {

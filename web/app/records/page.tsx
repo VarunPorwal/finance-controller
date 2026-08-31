@@ -12,7 +12,12 @@ type AuditEvent = components["schemas"]["AuditEventOut"];
 type TransactionEvent = components["schemas"]["TransactionEvent"];
 type RecordsBundle = { counts: EventCount | null; history: AuditEvent[]; events: TransactionEvent[] };
 
-const SOURCES = ["razorpay", "bank", "tally"] as const;
+// Ledger rows are stored with source="ledger" (fc/ingest/tally.py: source
+// data comes from Tally, but the by_source/audit-action key it writes is
+// "ledger", not "tally") — the lookup key has to match that, not the
+// connector's display name.
+const SOURCES = ["razorpay", "bank", "ledger"] as const;
+const SOURCE_LABEL: Record<string, string> = { ledger: "Tally" };
 
 export async function fetchRecordsBundle(runId: string): Promise<RecordsBundle> {
   const [countRes, auditRes, eventsRes] = await Promise.all([
@@ -57,7 +62,7 @@ export default function RecordsPage() {
           const rejectionCount = Number((lastImport?.payload as Record<string, unknown> | undefined)?.rejection_count ?? 0);
           return (
             <div key={source} className="fc-card">
-              <div className="px-5 pt-4 text-sm font-semibold capitalize">{source}</div>
+              <div className="px-5 pt-4 text-sm font-semibold capitalize">{SOURCE_LABEL[source] ?? source}</div>
               <div className="px-5 pt-3.5 pb-5">
                 <div className="fc-numeric text-[22px] font-semibold">{count.toLocaleString("en-IN")}</div>
                 <div className="mt-0.5 text-xs text-text-muted">
