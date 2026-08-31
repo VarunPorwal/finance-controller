@@ -11,10 +11,17 @@ import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
 type EventCount = components["schemas"]["EventCountOut"];
 type EvalResult = components["schemas"]["EvalResultOut"];
+interface HomeBundle {
+  prevSummary: RunSummary | null;
+  counts: EventCount | null;
+  evalResult: EvalResult | null;
+  runHistoryDepth: number;
+}
 
 const SOURCE_COLOR: Record<string, string> = {
   razorpay: "var(--primary)",
@@ -25,16 +32,25 @@ const SOURCE_COLOR: Record<string, string> = {
 export default function ReconcileHome() {
   const { summary, loading, error } = useRun();
   const router = useRouter();
-  const [prevSummary, setPrevSummary] = useState<RunSummary | null>(null);
-  const [counts, setCounts] = useState<EventCount | null>(null);
-  const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
-  const [runHistoryDepth, setRunHistoryDepth] = useState<number | null>(null);
-
   const runId = summary?.run.run_id;
+  const cacheKey = `home:${runId ?? "none"}`;
+  const cached = cacheGet<HomeBundle>(cacheKey);
+  const [prevSummary, setPrevSummary] = useState<RunSummary | null>(cached?.prevSummary ?? null);
+  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
+  const [evalResult, setEvalResult] = useState<EvalResult | null>(cached?.evalResult ?? null);
+  const [runHistoryDepth, setRunHistoryDepth] = useState<number | null>(cached?.runHistoryDepth ?? null);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
+    const key = `home:${runId}`;
+    const seeded = cacheGet<HomeBundle>(key);
+    if (seeded) {
+      setPrevSummary(seeded.prevSummary);
+      setCounts(seeded.counts);
+      setEvalResult(seeded.evalResult);
+      setRunHistoryDepth(seeded.runHistoryDepth);
+    }
     async function load() {
       const [runsRes, countRes, evalRes] = await Promise.all([
         apiClient.GET("/api/v1/runs", { params: { query: { status: "complete", limit: 2 } } }),
@@ -43,18 +59,28 @@ export default function ReconcileHome() {
       ]);
       if (cancelled) return;
       const runs = runsRes.data?.items ?? [];
-      setRunHistoryDepth(runs.length);
+      let prev: RunSummary | null = null;
       if (runs.length > 1) {
         const olderRunId = runs.find((r) => r.run_id !== runId)?.run_id;
         if (olderRunId) {
           const { data } = await apiClient.GET("/api/v1/runs/{run_id}/summary", {
             params: { path: { run_id: olderRunId } },
           });
-          if (!cancelled) setPrevSummary(data ?? null);
+          if (cancelled) return;
+          prev = data ?? null;
         }
       }
-      if (!cancelled) setCounts(countRes.data ?? null);
-      if (!cancelled) setEvalResult(evalRes.data ?? null);
+      const bundle: HomeBundle = {
+        prevSummary: prev,
+        counts: countRes.data ?? null,
+        evalResult: evalRes.data ?? null,
+        runHistoryDepth: runs.length,
+      };
+      cacheSet(key, bundle);
+      setPrevSummary(bundle.prevSummary);
+      setCounts(bundle.counts);
+      setEvalResult(bundle.evalResult);
+      setRunHistoryDepth(bundle.runHistoryDepth);
     }
     void load();
     return () => {

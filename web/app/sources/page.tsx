@@ -6,9 +6,11 @@ import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { IngestPanel } from "@/components/ingest-panel";
 import { StatusPill } from "@/components/ui/status-pill";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type EventCount = components["schemas"]["EventCountOut"];
 type AuditEvent = components["schemas"]["AuditEventOut"];
+type SourcesBundle = { counts: EventCount | null; history: AuditEvent[] };
 
 const CONNECTORS = [
   { key: "razorpay", name: "Razorpay", icon: CreditCard, iconBg: "var(--primary-tint)", iconColor: "var(--primary)" },
@@ -18,21 +20,33 @@ const CONNECTORS = [
 
 export default function DataSourcesPage() {
   const { summary, refresh } = useRun();
-  const [counts, setCounts] = useState<EventCount | null>(null);
-  const [history, setHistory] = useState<AuditEvent[]>([]);
   const runId = summary?.run.run_id;
+  const cached = cacheGet<SourcesBundle>(`sources:${runId ?? "none"}`);
+  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
+  const [history, setHistory] = useState<AuditEvent[]>(cached?.history ?? []);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
+    const key = `sources:${runId}`;
+    const seeded = cacheGet<SourcesBundle>(key);
+    if (seeded) {
+      setCounts(seeded.counts);
+      setHistory(seeded.history);
+    }
     async function load() {
       const [countRes, auditRes] = await Promise.all([
         apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
         apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
       ]);
       if (cancelled) return;
-      setCounts(countRes.data ?? null);
-      setHistory((auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")));
+      const bundle: SourcesBundle = {
+        counts: countRes.data ?? null,
+        history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
+      };
+      cacheSet(key, bundle);
+      setCounts(bundle.counts);
+      setHistory(bundle.history);
     }
     void load();
     return () => {

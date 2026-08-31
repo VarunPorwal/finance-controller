@@ -5,23 +5,34 @@ import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
+import { cacheGet, cacheSet } from "@/lib/page-cache";
 
 type EventCount = components["schemas"]["EventCountOut"];
 type AuditEvent = components["schemas"]["AuditEventOut"];
 type TransactionEvent = components["schemas"]["TransactionEvent"];
+type RecordsBundle = { counts: EventCount | null; history: AuditEvent[]; events: TransactionEvent[] };
 
 const SOURCES = ["razorpay", "bank", "tally"] as const;
 
 export default function RecordsPage() {
   const { summary } = useRun();
-  const [counts, setCounts] = useState<EventCount | null>(null);
-  const [history, setHistory] = useState<AuditEvent[]>([]);
-  const [events, setEvents] = useState<TransactionEvent[]>([]);
   const runId = summary?.run.run_id;
+  const cacheKey = `records:${runId ?? "none"}`;
+  const cached = cacheGet<RecordsBundle>(cacheKey);
+  const [counts, setCounts] = useState<EventCount | null>(cached?.counts ?? null);
+  const [history, setHistory] = useState<AuditEvent[]>(cached?.history ?? []);
+  const [events, setEvents] = useState<TransactionEvent[]>(cached?.events ?? []);
 
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
+    const key = `records:${runId}`;
+    const seeded = cacheGet<RecordsBundle>(key);
+    if (seeded) {
+      setCounts(seeded.counts);
+      setHistory(seeded.history);
+      setEvents(seeded.events);
+    }
     async function load() {
       const [countRes, auditRes, eventsRes] = await Promise.all([
         apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
@@ -29,9 +40,15 @@ export default function RecordsPage() {
         apiClient.GET("/api/v1/events", { params: { query: { run_id: runId, limit: 30 } } }),
       ]);
       if (cancelled) return;
-      setCounts(countRes.data ?? null);
-      setHistory((auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")));
-      setEvents(eventsRes.data?.items ?? []);
+      const bundle: RecordsBundle = {
+        counts: countRes.data ?? null,
+        history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
+        events: eventsRes.data?.items ?? [],
+      };
+      cacheSet(key, bundle);
+      setCounts(bundle.counts);
+      setHistory(bundle.history);
+      setEvents(bundle.events);
     }
     void load();
     return () => {
