@@ -96,6 +96,12 @@ def build(
     for settlement in settlements:
         if settlement.on_hold:
             continue
+        # Scenario 21: Razorpay reported the settlement and the bank never
+        # credited it. The field existed on Settlement and nothing read it, so
+        # the only way a settlement could go missing was on_hold — which is a
+        # different fact with a different narration and a different outcome.
+        if settlement.skip_bank_row:
+            continue
         totals = compute_totals(settlement)
         net = totals.net_credit_paise
         if net == 0:

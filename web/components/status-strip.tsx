@@ -27,7 +27,7 @@ export function StatusStrip() {
   }, []);
 
   if (!health) {
-    return <span className="text-paper-500 text-xs">model status —</span>;
+    return <span className="text-text-muted text-xs">model status —</span>;
   }
 
   const tierEntries = Object.entries(health.tiers ?? {});
@@ -38,10 +38,10 @@ export function StatusStrip() {
         const rows = models as Array<Record<string, unknown>>;
         const anyAvailable = rows.some((row) => row.available);
         return (
-          <span key={tier} className="text-paper-300">
+          <span key={tier} className="text-text-body">
             {tier}
             <span
-              className={anyAvailable ? "text-sig-green ml-1" : "text-sig-amber ml-1"}
+              className={anyAvailable ? "text-success ml-1" : "text-amber-text ml-1"}
               aria-label={anyAvailable ? "available" : "standby"}
             >
               {anyAvailable ? "✓" : "standby"}
@@ -49,11 +49,11 @@ export function StatusStrip() {
           </span>
         );
       })}
-      <span className="text-paper-500">·</span>
-      <span className="fc-numeric text-paper-300">{health.calls_this_run} calls</span>
-      <span className="text-paper-500">·</span>
-      <span className="fc-numeric text-paper-300">{health.cache_hit_rate} cached</span>
-      {health.degraded && <span className="text-sig-amber">degraded</span>}
+      <span className="text-text-muted">·</span>
+      <span className="fc-numeric text-text-body">{health.calls_this_run} calls</span>
+      <span className="text-text-muted">·</span>
+      <span className="fc-numeric text-text-body">{health.cache_hit_rate} cached</span>
+      {health.degraded && <span className="text-amber-text">degraded</span>}
     </div>
   );
 }

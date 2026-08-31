@@ -393,26 +393,40 @@ def _base_warnings(facts: ExceptionFacts) -> list[Warning_]:
 # --- per-verb handlers -------------------------------------------------------
 
 
+def _chargeback_without_dispute(facts: ExceptionFacts) -> Warning_ | None:
+    """§8.5 rule 4, as a gate any *closing* verb can apply.
+
+    It used to live inline in ``_resolve``, so a write-off closed an unrecorded
+    chargeback with no dispute reference and no acknowledgement at all — the
+    same irreversible decision, reached by the other door. The rule is about
+    closing the item, not about which word the operator happened to use, so it
+    belongs where both callers can reach it.
+
+    Returns the warning when the gate applies, ``None`` when it does not; the
+    caller sets ``requires_acknowledgement`` from that.
+    """
+    if facts.category != "chargeback_unrecorded" or facts.has_dispute_reference:
+        return None
+    return Warning_(
+        code="chargeback_without_dispute_ref",
+        message=(
+            "This is an unrecorded chargeback and nothing here cites a dispute "
+            "reference. Closing it drops the contest window without a record of "
+            "why. Acknowledge explicitly if that is what you mean to do."
+        ),
+        detail={"deadline_matters": True},
+    )
+
+
 def _resolve(command: ParsedCommand, ctx: CommandContext, cfg: Config) -> Preview:
     payload = command.payload
     facts = ctx.exceptions[payload.exception_id]  # type: ignore[union-attr]
     warnings = _base_warnings(facts)
-    ack = False
+    chargeback = _chargeback_without_dispute(facts)
+    ack = chargeback is not None
 
-    # §8.5 rule 4 — a chargeback closed with no dispute reference.
-    if facts.category == "chargeback_unrecorded" and not facts.has_dispute_reference:
-        ack = True
-        warnings.append(
-            Warning_(
-                code="chargeback_without_dispute_ref",
-                message=(
-                    "This is an unrecorded chargeback and nothing here cites a dispute "
-                    "reference. Closing it drops the contest window without a record of "
-                    "why. Acknowledge explicitly if that is what you mean to do."
-                ),
-                detail={"deadline_matters": True},
-            )
-        )
+    if chargeback is not None:
+        warnings.append(chargeback)
     elif facts.category in NEVER_AUTO:
         warnings.append(
             Warning_(
@@ -457,8 +471,16 @@ def _write_off(command: ParsedCommand, ctx: CommandContext, cfg: Config) -> Prev
     facts = [ctx.exceptions[i] for i in ids]
     total = sum(f.amount_paise for f in facts)
     warnings: list[Warning_] = []
+    ack = False
     for f in facts:
         warnings.extend(_base_warnings(f))
+        # One chargeback without a dispute reference anywhere in the batch gates
+        # the whole write-off: the acknowledgement is about that item, and a
+        # batch is not a way to slip it through unremarked.
+        chargeback = _chargeback_without_dispute(f)
+        if chargeback is not None:
+            warnings.append(chargeback)
+            ack = True
 
     typed = total >= cfg.typed_confirm_paise
     return Preview(
@@ -478,6 +500,7 @@ def _write_off(command: ParsedCommand, ctx: CommandContext, cfg: Config) -> Prev
         warnings=tuple(warnings),
         requires_typed_confirmation=typed,
         typed_confirmation_paise=total if typed else None,
+        requires_acknowledgement=ack,
     )
 
 

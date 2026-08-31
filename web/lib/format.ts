@@ -14,6 +14,17 @@ export function formatPaise(paise: number): string {
   return `${sign}₹${formatted}`;
 }
 
+/** Integer paise -> "₹5,04,200", Indian digit grouping, no decimal places —
+ * the design handoff's convention for every amount outside the evidence pack. */
+export function formatPaiseWhole(paise: number): string {
+  const rupees = Math.round(paise / 100);
+  const sign = rupees < 0 ? "-" : "";
+  const formatted = new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 0,
+  }).format(Math.abs(rupees));
+  return `${sign}₹${formatted}`;
+}
+
 /** Same as {@link formatPaise} without the currency glyph, for compact contexts. */
 export function formatPaiseCompact(paise: number): string {
   const rupees = Math.abs(paise) / 100;

@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
-import { Inter, IBM_Plex_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-// PRD §13.3: Satoshi (display), Inter (body), IBM Plex Mono (every number,
-// reference and UTR). Satoshi is not on Google Fonts — it ships from
-// Fontshare, loaded below via <link> with a system-sans fallback baked into
-// --font-satoshi so a cold cache (or `make demo-local`'s no-network path)
-// degrades to a normal heading font instead of an invisible one.
+// PRD §13.3 (rewritten 31 Aug 2026): Inter for every UI face — headings
+// included, max weight 600, no separate display font — and JetBrains Mono
+// for every number, reference and UTR. design/README.md is the source of
+// truth for both.
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
   display: "swap",
 });
 
-const plexMono = IBM_Plex_Mono({
-  variable: "--font-plex-mono",
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-mono-numeral",
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   display: "swap",
@@ -31,14 +31,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${plexMono.variable}`}>
-      <head>
-        <link
-          href="https://api.fontshare.com/v2/css?f[]=satoshi@500,700,900&display=swap"
-          rel="stylesheet"
-        />
-        <style>{`:root { --font-satoshi: 'Satoshi', var(--font-inter), sans-serif; }`}</style>
-      </head>
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
       <body className="antialiased">{children}</body>
     </html>
   );

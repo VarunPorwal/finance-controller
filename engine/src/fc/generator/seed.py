@@ -303,6 +303,16 @@ def generate(seed: int, n: int) -> dict[str, Any]:
         target = settlement.orders[0]
         target.dispute_paise = target.amount_paise
 
+    # Scenario 20: the same shape as 6, minus the dispute reference. §8.5 rule
+    # 4 requires an acknowledgement to close one of these, and until now the
+    # corpus had none — every chargeback carried a dispute_id, so the gate was
+    # unreachable rather than merely untriggered.
+    for settlement in _take(own_store_settlements, counts[20]):
+        settlement.scenario = 20
+        target = settlement.orders[0]
+        target.dispute_paise = target.amount_paise
+        target.dispute_reference_visible = False
+
     for settlement in _take(own_store_settlements, counts[13]):
         settlement.scenario = 13
         target = settlement.orders[0]
@@ -398,6 +408,38 @@ def generate(seed: int, n: int) -> dict[str, Any]:
         settlement.scenario = 13
         target = settlement.orders[0]
         target.refund_paise = round(target.amount_paise * 0.4)
+
+    # Scenario 21: one six-figure own-store settlement Razorpay reports and the
+    # bank never credits. A single order, not a batch, because §8.5 rule 5 gates
+    # on one exception's amount and a large batch of ordinary orders produces
+    # many small exceptions instead of one big one. ₹1,04,000 gross clears
+    # typed_confirm_paise (₹50,000) with room to spare after MDR, GST and TDS.
+    large_settle_date = PERIOD_START + timedelta(days=45)
+    large_order = Order(
+        order_id=issue_id("order_"),
+        channel="own_store",
+        platform=None,
+        method="netbanking",
+        amount_paise=1_04_000_00,
+        order_date=large_settle_date - timedelta(days=2),
+        gt_group="",
+    )
+    large_settlement_id = issue_id("setl_")
+    large_order.gt_group = large_settlement_id
+    extra_settlements.append(
+        Settlement(
+            settlement_id=large_settlement_id,
+            channel="own_store",
+            platform=None,
+            settle_date=large_settle_date,
+            value_date=large_settle_date,
+            orders=[large_order],
+            scenario=21,
+            skip_bank_row=True,
+            gt_bucket="exception",
+            gt_label="missing_in_bank",
+        )
+    )
 
     settlements += extra_settlements
     settlements.sort(key=lambda s: (s.settle_date, s.settlement_id))
@@ -517,7 +559,14 @@ def generate(seed: int, n: int) -> dict[str, Any]:
             "standalone_bank_rows": len(standalone_bank),
         },
     )
-    _self_check(razorpay_rows, bank_text, bank_gt, tally_text, seed)
+    _self_check(
+        razorpay_rows,
+        bank_text,
+        bank_gt,
+        tally_text,
+        seed,
+        expected_bankless=frozenset(s.settlement_id for s in settlements if s.skip_bank_row),
+    )
     return manifest
 
 
@@ -527,6 +576,7 @@ def _self_check(
     bank_gt: list[ground_truth.GTEntry],
     tally_text: str,
     seed: int,
+    expected_bankless: frozenset[str] = frozenset(),
 ) -> None:
     check_issue_id = deterministic_factory(seed=seed, epoch_ms=EPOCH_MS)
 
@@ -556,7 +606,9 @@ def _self_check(
     if not bank_result.balanced:
         raise AssertionError(f"bank self-check: balance discontinuity — {bank_result.breaks}")
 
-    _check_settlement_arithmetic(razorpay_rows, bank_result.ingest.events, bank_gt)
+    _check_settlement_arithmetic(
+        razorpay_rows, bank_result.ingest.events, bank_gt, expected_bankless
+    )
 
     tally_result = parse_tally_csv(
         tally_text,
@@ -574,6 +626,7 @@ def _check_settlement_arithmetic(
     razorpay_rows: list[dict[str, Any]],
     bank_events: Any,
     bank_gt: list[ground_truth.GTEntry],
+    expected_bankless: frozenset[str] = frozenset(),
 ) -> None:
     """For every settlement: sum(payment.credit) - TDS - reserve - refunds -
     disputes + reserve_release == the bank credit actually posted for it.
@@ -613,10 +666,13 @@ def _check_settlement_arithmetic(
 
     unmatched = [sid for sid in by_settlement if sid not in bank_credit_by_settlement]
     # Legitimately bank-less settlements: on-hold (scenario 12, money hasn't
-    # moved) and reserve-release settlements with no orders of their own are
-    # ruled out by construction elsewhere; anything left here is a real gap.
+    # moved), scenario 21 (reported by Razorpay and never credited — that
+    # absence *is* the scenario), and reserve-release settlements with no
+    # orders of their own, which are ruled out by construction elsewhere.
+    # Anything left here is a real gap.
     on_hold_settlement_ids = {row["settlement_id"] for row in razorpay_rows if row.get("on_hold")}
-    genuinely_missing = [sid for sid in unmatched if sid not in on_hold_settlement_ids]
+    expected_missing = on_hold_settlement_ids | expected_bankless
+    genuinely_missing = [sid for sid in unmatched if sid not in expected_missing]
     if genuinely_missing:
         raise AssertionError(
             f"settlement arithmetic self-check: {len(genuinely_missing)} settlements "

@@ -166,6 +166,12 @@ class Order:
     #: would let exact reference matching resolve them in one hop, which is not
     #: the failure mode the scenario exists to produce.
     ledger_reference_visible: bool = True
+    #: Scenario 20. A chargeback whose Razorpay dispute row carries no
+    #: dispute_id — the debit landed before the dispute record was raised, so
+    #: there is no reference to contest it with. classify.py already reads
+    #: `dispute_id or event_id` for exactly this case, and §8.5 rule 4 makes
+    #: closing one require an explicit acknowledgement.
+    dispute_reference_visible: bool = True
     #: Marketplace-only per-order override (scenario 18: a rate change lands
     #: mid-settlement, so orders on either side of the cutover carry
     #: different rates — only an effective-dated rule resolves the whole
@@ -336,6 +342,24 @@ EXTRA_SCENARIOS: tuple[Scenario, ...] = (
         "prompt_injection_narration",
         "Bank narration carrying prompt-injection text shaped like an operator instruction",
     ),
+    #: §8.5 rule 4 needs a chargeback with nothing to contest it with. Every
+    #: other chargeback in the corpus carries a dispute_id, which made the
+    #: acknowledgement gate unreachable: the category is only ever built from a
+    #: dispute-type row, so "is a dispute row linked" was true by construction.
+    #: Here the debit arrives before the dispute record is raised.
+    Scenario(
+        20,
+        "chargeback_no_dispute_reference",
+        "Chargeback debited with no dispute id to contest it with",
+    ),
+    #: §8.5 rule 5 needs a single item over typed_confirm_paise (₹50,000). The
+    #: corpus topped out at ₹11,313, so the gate could never fire. One large
+    #: own-store settlement that Razorpay reports and the bank never credits.
+    Scenario(
+        21,
+        "large_settlement_missing_in_bank",
+        "Six-figure settlement reported by Razorpay and never credited by the bank",
+    ),
 )
 
 #: Target case count per scenario at N=500; scaled linearly and floored at 2.
@@ -359,6 +383,7 @@ _BASE_COUNTS: dict[int, int] = {
     17: 2,
     18: 2,
     19: 2,
+    20: 2,
 }
 
 

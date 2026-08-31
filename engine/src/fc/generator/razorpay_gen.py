@@ -165,7 +165,11 @@ def build(
                         "card_network": None,
                         "card_issuer": None,
                         "card_type": None,
-                        "dispute_id": dp_id,
+                        # Scenario 20: the debit landed before the dispute
+                        # record was raised, so there is no reference to
+                        # contest it with. classify.py already falls back to
+                        # the event id when narrating this.
+                        "dispute_id": dp_id if order.dispute_reference_visible else None,
                     }
                 )
                 gt.append(
