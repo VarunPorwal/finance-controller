@@ -1341,20 +1341,55 @@ async def _answer_via_sql(
         ),
     )
     purpose = "text_to_sql_light" if _is_simple_lookup(question, history) else "text_to_sql"
-    result = await client.call(
-        purpose,
-        prompt=wrap_untrusted(_sql_prompt(question, history, run_id), source="operator_question"),
-        system=load_prompt("sql_system"),
-        tenant_id=user.tenant_id,
-        run_id=run_id,
-        schema=SqlPlan,
-        requires=STRUCTURED,
-        fallback=refusal.model_dump_json(),
-    )
-    await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
-    await session.commit()
+    prompt = wrap_untrusted(_sql_prompt(question, history, run_id), source="operator_question")
 
-    plan = SqlPlan.model_validate_json(result.text)
+    # Two attempts, because one malformed generation is not a reason to give up
+    # while eight models remain on the ladder. Observed failures are a stray
+    # token appended past the final paren — `}”,` or a lone `κ` — which the
+    # schema cannot catch (it asks for a string, and that is a string) and which
+    # the same model usually does not repeat. Rejecting between attempts is what
+    # makes the second one real: text_to_sql is in HAS_DOWNSTREAM_CHECK, so a
+    # plan is only remembered once the guard has agreed with it.
+    result = None
+    plan = None
+    safe_sql = None
+    guard_error: SqlRejected | None = None
+
+    for attempt in range(2):
+        result = await client.call(
+            purpose,
+            prompt=prompt,
+            system=load_prompt("sql_system"),
+            tenant_id=user.tenant_id,
+            run_id=run_id,
+            schema=SqlPlan,
+            requires=STRUCTURED,
+            fallback=refusal.model_dump_json(),
+        )
+        await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+        await session.commit()
+
+        plan = SqlPlan.model_validate_json(result.text)
+        if not plan.answerable or not plan.sql:
+            break
+
+        try:
+            safe_sql = guard(plan.sql, tenant_id=user.tenant_id)
+            guard_error = None
+            break
+        except SqlRejected as exc:
+            guard_error = exc
+            client.reject(result, tenant_id=user.tenant_id, run_id=run_id)
+            await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
+            await session.commit()
+            _LOG.warning(
+                "sql guard rejected a generated query (attempt %d): %s | sql=%s",
+                attempt + 1,
+                exc,
+                plan.sql,
+            )
+
+    assert result is not None and plan is not None
     if not plan.answerable or not plan.sql:
         # Rendered verbatim. A refusal that gets paraphrased into an apology
         # stops being information (hard rule 4) — and §13.7 wants it plain,
@@ -1367,23 +1402,12 @@ async def _answer_via_sql(
             cached=result.cached,
         )
 
-    try:
-        safe_sql = guard(plan.sql, tenant_id=user.tenant_id)
-    except SqlRejected as exc:
-        # text_to_sql is in HAS_DOWNSTREAM_CHECK, so nothing was cached by
-        # call(). Rejecting here keeps it that way: the next ask of the same
-        # question gets a fresh attempt instead of this one served back.
-        client.reject(result, tenant_id=user.tenant_id, run_id=run_id)
-        await persist_llm_calls(session, buffer, tenant_id=user.tenant_id)
-        await session.commit()
-        # The reason is logged, never rendered. It used to be interpolated
-        # straight into refusal_reason, so a parse failure put sqlglot's token
-        # dump — ANSI underline escapes and all — on screen as the answer. §13.7
-        # wants a refusal plain and conversational; "Expecting ). Line 1, Col:
-        # 19" is neither, and there is nothing the reader could do with it.
-        _LOG.warning(
-            "sql guard rejected a generated query: %s | sql=%s", exc, plan.sql, exc_info=True
-        )
+    if guard_error is not None or safe_sql is None:
+        # Both attempts failed. The reason is logged, never rendered: it used to
+        # be interpolated straight into refusal_reason, so a parse failure put
+        # sqlglot's token dump — ANSI underline escapes and all — on screen as
+        # the answer. §13.7 wants a refusal plain and conversational, and
+        # "Expecting ). Line 1, Col: 19" is neither.
         return AskOut(
             answerable=False,
             tool="sql",
