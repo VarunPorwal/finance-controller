@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Plus, Sparkle } from "lucide-react";
+import { Plus, Sparkle, Upload } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { humanizeSnakeCase } from "@/lib/format";
 import { FilterPills } from "@/components/ui/filter-pills";
@@ -44,9 +44,52 @@ export default function RuleBookPage() {
   const [creating, setCreating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [pendingBacktest, setPendingBacktest] = useState<{ ruleId: string; version: number; name: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function reload() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.rules({}) });
+  }
+
+  async function importRulesFile(file: File) {
+    setImporting(true);
+    setImportMessage(null);
+    try {
+      const text = await file.text();
+      let entries: unknown;
+      try {
+        entries = JSON.parse(text);
+      } catch {
+        setImportMessage({ tone: "error", text: "Not valid JSON." });
+        return;
+      }
+      if (!Array.isArray(entries)) {
+        setImportMessage({ tone: "error", text: "Expected a JSON list of rules." });
+        return;
+      }
+      const { data, error } = await apiClient.POST("/api/v1/rules/import", {
+        body: entries as Record<string, unknown>[],
+      });
+      if (error || !data) {
+        const detail =
+          error && typeof error === "object" && "detail" in error
+            ? String((error as { detail?: unknown }).detail)
+            : "Import failed.";
+        setImportMessage({ tone: "error", text: detail });
+        return;
+      }
+      const versionAdds = data.results.filter((r) => r.outcome === "created_version").length;
+      setImportMessage({
+        tone: "success",
+        text: `Imported ${data.created_count} draft${data.created_count === 1 ? "" : "s"}${
+          versionAdds ? ` (${versionAdds} as a new version of an existing rule)` : ""
+        }. Back-test and activate each from Rule Book.`,
+      });
+      reload();
+    } finally {
+      setImporting(false);
+    }
   }
 
   const latest = useMemo(() => {
@@ -97,15 +140,50 @@ export default function RuleBookPage() {
             Your business&apos;s deduction and settlement policy, encoded
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setCreating((c) => !c)}
-          className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white"
-        >
-          <Plus width={14} height={14} />
-          Create rule
-        </button>
+        <div className="flex items-center gap-2.5">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void importRulesFile(file);
+            }}
+          />
+          <button
+            type="button"
+            disabled={importing}
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-[12.5px] font-medium text-text-heading disabled:opacity-50"
+          >
+            <Upload width={14} height={14} />
+            {importing ? "Importing…" : "Upload rules JSON"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setCreating((c) => !c)}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white"
+          >
+            <Plus width={14} height={14} />
+            Create rule
+          </button>
+        </div>
       </div>
+
+      {importMessage && (
+        <div
+          className={
+            "mb-4 rounded-lg border px-4 py-2.5 text-[12.5px] " +
+            (importMessage.tone === "success"
+              ? "border-success/30 bg-success-bg text-success"
+              : "border-error/30 bg-error-bg text-error")
+          }
+        >
+          {importMessage.text}
+        </div>
+      )}
 
       {creating && (
         <div className="fc-card mb-5 p-5">

@@ -1,4 +1,6 @@
-"""SQLAlchemy 2.0 models mirroring PRD §4.3 — the 12 core tables.
+"""SQLAlchemy 2.0 models mirroring PRD §4.3 — the 12 core tables, plus
+``ingested_files`` (migration 0004, added past the 28 Aug freeze with
+explicit sign-off).
 
 Every money column is ``BIGINT`` paise. Never ``NUMERIC``, never ``DOUBLE``:
 the arithmetic that matters happens in the engine over ``int`` and ``Decimal``,
@@ -443,5 +445,36 @@ class EvalResult(Base):
         JSONB, nullable=False, server_default="[]"
     )
     computed_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=_NOW
+    )
+
+
+class IngestedFile(Base):
+    """Raw bytes of an uploaded source file, kept for re-ingestion (migration 0004).
+
+    Not tied to a ``run_id`` — the point is that the same file can be
+    re-ingested into a different run later, so it lives independently of
+    any one run's lifecycle.
+    """
+
+    __tablename__ = "ingested_files"
+    __table_args__ = (
+        sa.CheckConstraint("source IN ('razorpay','bank','ledger')", name="ck_if_source"),
+        sa.Index("ix_if_tenant_source_time", "tenant_id", "source", sa.text("uploaded_at DESC")),
+    )
+
+    file_id: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(
+        sa.Text, sa.ForeignKey("tenants.tenant_id"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(sa.Text, nullable=False)  # razorpay|bank|ledger
+    filename: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    content: Mapped[bytes] = mapped_column(sa.LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    uploaded_by: Mapped[str] = mapped_column(
+        sa.Text, sa.ForeignKey("users.user_id"), nullable=False
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=_NOW
     )

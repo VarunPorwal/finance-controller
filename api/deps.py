@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import jwt
 from fastapi import Depends, Header
@@ -364,7 +365,7 @@ async def persist_llm_calls(
     # first record's full row (it carries prompt_hash and token counts) and
     # let a later record for the same call_id only override verified/outcome,
     # matching what the old row-by-row upsert did.
-    merged: dict[str, dict] = {}
+    merged: dict[str, dict[str, Any]] = {}
     for record in records:
         values = dict(
             call_id=record.call_id,

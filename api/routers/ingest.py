@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, UploadFile
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,7 @@ from api.deps import (
     persist_llm_calls_detached,
 )
 from api.errors import ApiError
-from db.models import Run, TransactionEventRow
+from db.models import IngestedFile, Run, TransactionEventRow
 from fc.ingest.bank_csv import BankIngestResult, parse_bank_csv
 from fc.ingest.bank_pdf import (
     ExtractionRejected,
@@ -45,7 +46,7 @@ from fc.ingest.razorpay import parse_razorpay_recon
 from fc.ingest.tally import parse_tally_csv
 from fc.ingest.validators import Break, Rejection
 from fc.llm.client import LLMClient
-from fc.models.ids import deterministic_factory
+from fc.models.ids import deterministic_factory, new_ulid
 from fc.models.transaction import TransactionEvent
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
@@ -108,12 +109,34 @@ class RejectionsOut(BaseModel):
     rejections: list[RejectionOut]
 
 
+class IngestedFileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_id: str
+    source: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    uploaded_at: datetime
+
+
 def _rejection_out(r: Rejection) -> RejectionOut:
     return RejectionOut(source_row_id=r.source_row_id, reason=r.reason, field_count=len(r.fields))
 
 
 def _break_out(b: Break) -> BreakOut:
     return BreakOut(row=b.row, expected_paise=b.expected, found_paise=b.found)
+
+
+def _file_out(r: IngestedFile) -> IngestedFileOut:
+    return IngestedFileOut(
+        file_id=r.file_id,
+        source=r.source,
+        filename=r.filename,
+        content_type=r.content_type,
+        size_bytes=r.size_bytes,
+        uploaded_at=r.uploaded_at,
+    )
 
 
 async def _load_open_run(session: AsyncSession, run_id: str) -> Run:
@@ -125,6 +148,87 @@ async def _load_open_run(session: AsyncSession, run_id: str) -> Run:
             409, "invalid state", f"run {run_id} is {row.status!r}, not open for ingestion"
         )
     return row
+
+
+async def _resolve_upload(
+    session: AsyncSession, *, file: UploadFile | None, source_file_id: str | None
+) -> tuple[bytes, str]:
+    """Either a fresh multipart upload or a previously stored file — never both.
+
+    Re-ingesting a stored file goes through the exact same parse/persist path
+    a fresh upload does; this is the one place the two diverge, resolving to
+    the same ``(bytes, filename)`` shape either way.
+    """
+    if file is not None and source_file_id is not None:
+        raise ApiError(400, "bad request", "provide either file or source_file_id, not both")
+    if file is not None:
+        return await file.read(), file.filename or "upload"
+    if source_file_id is not None:
+        row = await session.get(IngestedFile, source_file_id)
+        if row is None:
+            raise ApiError(404, "not found", f"no stored file {source_file_id}")
+        return row.content, row.filename
+    raise ApiError(400, "bad request", "provide file or source_file_id")
+
+
+async def _store_file(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    user_id: str,
+    source: str,
+    filename: str,
+    content_type: str,
+    content: bytes,
+) -> None:
+    """Keep the raw bytes of a fresh upload so Data Sources can re-ingest it
+    later without asking the user to find the file again (PRD gap closed
+    31 Aug 2026, migration 0004 — nothing kept the original file before
+    this; only the parsed rows survived)."""
+    session.add(
+        IngestedFile(
+            file_id=new_ulid(prefix="file_"),
+            tenant_id=tenant_id,
+            source=source,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            size_bytes=len(content),
+            uploaded_by=user_id,
+        )
+    )
+    await session.flush()
+
+
+@router.get("/files", response_model=list[IngestedFileOut])
+async def list_ingested_files(
+    source: str | None = Query(None, pattern="^(razorpay|bank|ledger)$"),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> list[IngestedFileOut]:
+    stmt = (
+        select(IngestedFile)
+        .where(IngestedFile.tenant_id == user.tenant_id)
+        .order_by(IngestedFile.uploaded_at.desc())
+    )
+    if source is not None:
+        stmt = stmt.where(IngestedFile.source == source)
+    rows = (await session.scalars(stmt)).all()
+    return [_file_out(r) for r in rows]
+
+
+@router.delete("/files/{file_id}", status_code=204)
+async def delete_ingested_file(
+    file_id: str,
+    dry_run: bool = Query(False),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> None:
+    row = await session.get(IngestedFile, file_id)
+    if row is None:
+        raise ApiError(404, "not found", f"no file {file_id}")
+    await session.delete(row)
+    await finish(session, dry_run=dry_run)
 
 
 async def _persist(
@@ -201,20 +305,32 @@ async def _persist(
 
 @router.post("/razorpay", response_model=IngestOut)
 async def ingest_razorpay(
-    file: UploadFile,
+    file: UploadFile | None = None,
     run_id: str = Query(...),
+    source_file_id: str | None = Query(None),
     dry_run: bool = Query(False),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
 ) -> IngestOut:
     run = await _load_open_run(session, run_id)
-    raw = json.loads((await file.read()).decode("utf-8"))
+    file_bytes, filename = await _resolve_upload(session, file=file, source_file_id=source_file_id)
+    raw = json.loads(file_bytes.decode("utf-8"))
     now = datetime.now(UTC)
     issue_id = deterministic_factory(seed=1, epoch_ms=int(now.timestamp() * 1000))
     result = parse_razorpay_recon(
         raw, run_id=run_id, tenant_id=user.tenant_id, issue_id=issue_id, ingested_at=now
     )
     inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    if file is not None:
+        await _store_file(
+            session,
+            tenant_id=user.tenant_id,
+            user_id=user.user_id,
+            source="razorpay",
+            filename=filename,
+            content_type="application/json",
+            content=file_bytes,
+        )
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -223,7 +339,7 @@ async def ingest_razorpay(
         subject_type="run",
         subject_id=run_id,
         payload={
-            "filename": file.filename,
+            "filename": filename,
             "event_count": inserted,
             "rejection_count": len(result.rejections),
             "deduplicated": len(result.events) - inserted,
@@ -243,9 +359,10 @@ async def ingest_razorpay(
 
 @router.post("/bank", response_model=IngestOut)
 async def ingest_bank(
-    file: UploadFile,
+    file: UploadFile | None = None,
     run_id: str = Query(...),
     opening_balance_paise: int = Query(...),
+    source_file_id: str | None = Query(None),
     dry_run: bool = Query(False),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
@@ -253,13 +370,14 @@ async def ingest_bank(
     buffer: LLMCallBuffer = Depends(get_llm_buffer),
 ) -> IngestOut:
     run = await _load_open_run(session, run_id)
-    raw = await file.read()
+    raw, filename = await _resolve_upload(session, file=file, source_file_id=source_file_id)
     now = datetime.now(UTC)
     issue_id = deterministic_factory(seed=2, epoch_ms=int(now.timestamp() * 1000))
 
     # ``detect_bank_format`` has always returned "pdf" for a %PDF- magic
     # number; this is the branch that finally consumes it (PRD §7.7, D6).
-    if detect_bank_format(raw, file.filename or "") == "pdf":
+    is_pdf = detect_bank_format(raw, filename) == "pdf"
+    if is_pdf:
         bank_result = await _extract_pdf(
             raw,
             run_id=run_id,
@@ -284,6 +402,16 @@ async def ingest_bank(
         )
     result = bank_result.ingest
     inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    if file is not None:
+        await _store_file(
+            session,
+            tenant_id=user.tenant_id,
+            user_id=user.user_id,
+            source="bank",
+            filename=filename,
+            content_type="application/pdf" if is_pdf else "text/csv",
+            content=raw,
+        )
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -293,7 +421,7 @@ async def ingest_bank(
         subject_id=run_id,
         payload={
             "event_count": inserted,
-            "filename": file.filename,
+            "filename": filename,
             "rejection_count": len(result.rejections),
             "deduplicated": len(result.events) - inserted,
             "balanced": bank_result.balanced,
@@ -315,20 +443,32 @@ async def ingest_bank(
 
 @router.post("/ledger", response_model=IngestOut)
 async def ingest_ledger(
-    file: UploadFile,
+    file: UploadFile | None = None,
     run_id: str = Query(...),
+    source_file_id: str | None = Query(None),
     dry_run: bool = Query(False),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
 ) -> IngestOut:
     run = await _load_open_run(session, run_id)
-    content = (await file.read()).decode("utf-8")
+    file_bytes, filename = await _resolve_upload(session, file=file, source_file_id=source_file_id)
+    content = file_bytes.decode("utf-8")
     now = datetime.now(UTC)
     issue_id = deterministic_factory(seed=3, epoch_ms=int(now.timestamp() * 1000))
     result = parse_tally_csv(
         content, run_id=run_id, tenant_id=user.tenant_id, issue_id=issue_id, ingested_at=now
     )
     inserted = await _persist(session, run=run, tenant_id=user.tenant_id, events=result.events)
+    if file is not None:
+        await _store_file(
+            session,
+            tenant_id=user.tenant_id,
+            user_id=user.user_id,
+            source="ledger",
+            filename=filename,
+            content_type="text/csv",
+            content=file_bytes,
+        )
     await append_audit(
         session,
         tenant_id=user.tenant_id,
@@ -339,7 +479,7 @@ async def ingest_ledger(
         payload={
             "event_count": inserted,
             "rejection_count": len(result.rejections),
-            "filename": file.filename,
+            "filename": filename,
             "deduplicated": len(result.events) - inserted,
             "dry_run": dry_run,
         },

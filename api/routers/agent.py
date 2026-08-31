@@ -592,9 +592,7 @@ _REF_COLUMNS = (
 async def _resolve_reference(session: AsyncSession, ref: str) -> list[RefCandidate]:
     rows = (
         await session.scalars(
-            select(TransactionEventRow).where(
-                or_(*(column == ref for _, column in _REF_COLUMNS))
-            )
+            select(TransactionEventRow).where(or_(*(column == ref for _, column in _REF_COLUMNS)))
         )
     ).all()
     out: list[RefCandidate] = []

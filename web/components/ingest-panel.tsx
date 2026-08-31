@@ -1,11 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { RotateCcw, Trash2 } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 
 type IngestOut = components["schemas"]["IngestOut"];
+type IngestedFileOut = components["schemas"]["IngestedFileOut"];
 type Source = "razorpay" | "bank" | "ledger";
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const SOURCES: { key: Source; label: string; accept: string }[] = [
   { key: "razorpay", label: "Razorpay recon (JSON)", accept: ".json" },
@@ -31,6 +40,7 @@ const EMPTY_SLOT: SlotState = { fileName: null, loading: false, result: null, er
  * over whatever actually got uploaded.
  */
 export function IngestPanel({ onComplete }: { onComplete: () => void }) {
+  const queryClient = useQueryClient();
   const [runId, setRunId] = useState<string | null>(null);
   const [openingBalanceRupees, setOpeningBalanceRupees] = useState("1000000");
   const [slots, setSlots] = useState<Record<Source, SlotState>>({
@@ -42,6 +52,57 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
   const [demoError, setDemoError] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [reingestingId, setReingestingId] = useState<string | null>(null);
+
+  const { data: storedFiles } = useQuery({
+    queryKey: ["ingest", "files"],
+    queryFn: async () => (await apiClient.GET("/api/v1/ingest/files", { params: { query: {} } })).data ?? [],
+  });
+
+  async function reingestFile(source: Source, file: IngestedFileOut) {
+    const id = await ensureRun();
+    if (!id) {
+      setSlots((prev) => ({
+        ...prev,
+        [source]: { ...prev[source], error: { detail: "Could not open a run to ingest into." } },
+      }));
+      return;
+    }
+    setReingestingId(file.file_id);
+    setSlots((prev) => ({
+      ...prev,
+      [source]: { fileName: file.filename, loading: true, result: null, error: null },
+    }));
+    const query =
+      source === "bank"
+        ? { run_id: id, source_file_id: file.file_id, opening_balance_paise: Math.round(Number(openingBalanceRupees) * 100) }
+        : { run_id: id, source_file_id: file.file_id };
+    const { data, error } = await apiClient.POST(`/api/v1/ingest/${source}` as "/api/v1/ingest/razorpay", {
+      params: { query },
+    });
+    setReingestingId(null);
+    if (error || !data) {
+      setSlots((prev) => ({
+        ...prev,
+        [source]: {
+          fileName: file.filename,
+          loading: false,
+          result: null,
+          error: { detail: "Could not reconcile from the stored file." },
+        },
+      }));
+      return;
+    }
+    setSlots((prev) => ({
+      ...prev,
+      [source]: { fileName: file.filename, loading: false, result: data, error: null },
+    }));
+  }
+
+  async function deleteStoredFile(fileId: string) {
+    await apiClient.DELETE("/api/v1/ingest/files/{file_id}", { params: { path: { file_id: fileId } } });
+    void queryClient.invalidateQueries({ queryKey: ["ingest", "files"] });
+  }
 
   async function runDemoCorpus() {
     setDemoRunning(true);
@@ -126,6 +187,7 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
           ...prev,
           [source]: { fileName: file.name, loading: false, result: data, error: null },
         }));
+        void queryClient.invalidateQueries({ queryKey: ["ingest", "files"] });
       } else {
         const problem = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
         setSlots((prev) => ({
@@ -219,7 +281,16 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
 
           <div className="flex flex-col gap-3">
             {SOURCES.map((s) => (
-              <SlotRow key={s.key} source={s} state={slots[s.key]} onFile={(f) => uploadSlot(s.key, f)} />
+              <SlotRow
+                key={s.key}
+                source={s}
+                state={slots[s.key]}
+                onFile={(f) => uploadSlot(s.key, f)}
+                storedFiles={(storedFiles ?? []).filter((f) => f.source === s.key)}
+                reingestingId={reingestingId}
+                onReingest={(f) => reingestFile(s.key, f)}
+                onDelete={deleteStoredFile}
+              />
             ))}
           </div>
         </div>
@@ -243,10 +314,18 @@ function SlotRow({
   source,
   state,
   onFile,
+  storedFiles,
+  reingestingId,
+  onReingest,
+  onDelete,
 }: {
   source: { key: Source; label: string; accept: string };
   state: SlotState;
   onFile: (file: File) => void;
+  storedFiles: IngestedFileOut[];
+  reingestingId: string | null;
+  onReingest: (file: IngestedFileOut) => void;
+  onDelete: (fileId: string) => void;
 }) {
   return (
     <div className="border-border bg-background rounded-lg border p-3">
@@ -264,6 +343,43 @@ function SlotRow({
           />
         </label>
       </div>
+
+      {storedFiles.length > 0 && (
+        <div className="border-border mt-2.5 border-t pt-2.5">
+          <p className="text-text-muted mb-1.5 text-[11px] font-medium uppercase tracking-wide">
+            Or reuse a previous upload
+          </p>
+          <ul className="flex flex-col gap-1">
+            {storedFiles.map((f) => (
+              <li key={f.file_id} className="flex items-center justify-between gap-2 text-xs">
+                <span className="text-text-body truncate">
+                  {f.filename} <span className="text-text-muted">· {formatBytes(f.size_bytes)}</span>
+                </span>
+                <span className="flex flex-none items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={reingestingId === f.file_id}
+                    onClick={() => onReingest(f)}
+                    className="text-primary hover:bg-primary-tint flex items-center gap-1 rounded px-1.5 py-0.5 disabled:opacity-50"
+                    title="Reconcile from this file"
+                  >
+                    <RotateCcw width={11} height={11} />
+                    Use
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(f.file_id)}
+                    className="text-text-muted hover:text-error rounded px-1 py-0.5"
+                    title="Delete stored file"
+                  >
+                    <Trash2 width={11} height={11} />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {state.loading && (
         <p className="text-text-muted mt-2 text-xs">Ingesting {state.fileName}…</p>

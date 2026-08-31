@@ -34,6 +34,7 @@ __all__ = [
     "DEFAULT_RULES_PATH",
     "RuleSet",
     "RuleSourceError",
+    "build_ruleset_from_entries",
     "canonical_semantics",
     "load_rules",
     "reload_if_changed",
@@ -171,16 +172,14 @@ def load_rules(
     documents = yaml.load(raw_text, Loader=_DecimalSafeLoader)
     if documents is None:
         documents = []
-    if not isinstance(documents, list):
-        raise RuleSourceError(
-            f"{source}: expected a YAML list of rules, got {type(documents).__name__}"
-        )
 
-    rules = tuple(
-        _build_rule(entry, index, source, tenant_id, created_at, default_status)
-        for index, entry in enumerate(documents)
+    rules = build_ruleset_from_entries(
+        documents,
+        source_label=str(source),
+        tenant_id=tenant_id,
+        created_at=created_at,
+        default_status=default_status,
     )
-    _reject_duplicate_versions(rules, source)
     stat = source.stat()
     return RuleSet(
         rules=rules,
@@ -208,6 +207,37 @@ def reload_if_changed(ruleset: RuleSet, **kwargs: Any) -> RuleSet:
     else:
         return ruleset
     return load_rules(ruleset.sources[0], **kwargs)
+
+
+def build_ruleset_from_entries(
+    entries: object,
+    *,
+    source_label: str,
+    tenant_id: str,
+    created_at: datetime,
+    default_status: str = "active",
+) -> tuple[Rule, ...]:
+    """The validation core of :func:`load_rules`, without the file I/O.
+
+    ``entries`` is a list of already-parsed rule mappings — what
+    ``yaml.load`` produces for a YAML rules file, or what
+    ``json.loads(text, parse_float=Decimal)`` produces for an uploaded JSON
+    one (``parse_float=Decimal`` is load-bearing the same way the YAML
+    loader's ``_DecimalSafeLoader`` is: a plain ``json.loads`` would turn a
+    ``"rate": 18.5`` into a binary float before this function ever sees it).
+    ``source_label`` names the source in error messages only; it need not be
+    a real path.
+    """
+    if not isinstance(entries, list):
+        raise RuleSourceError(
+            f"{source_label}: expected a list of rules, got {type(entries).__name__}"
+        )
+    rules = tuple(
+        _build_rule(entry, index, Path(source_label), tenant_id, created_at, default_status)
+        for index, entry in enumerate(entries)
+    )
+    _reject_duplicate_versions(rules, Path(source_label))
+    return rules
 
 
 def _build_rule(

@@ -1,7 +1,10 @@
 """PRD §5.9. Rules are immutable per version (CLAUDE.md hard rule 8) — this
 router never UPDATEs a ``rules`` row's ``deductions``/``scope``/``tolerance``;
 a change is always a new version, enforced twice over (the DB trigger, and
-this router never attempting it). Bulk import is cut per §0.1.
+this router never attempting it). Bulk import (cut per §0.1 originally) was
+added 31 Aug 2026 with explicit sign-off — ``POST /rules/import`` reuses
+``fc.rules.loader``'s entry validator, the same one the YAML seed ruleset
+goes through, so an uploaded JSON file is held to the same bar.
 
 ``backtest`` and ``suggestions`` both need a historical case's original
 ``gap_paise``/``gross_paise`` (§2.6 D4/D5), which the schema stores nowhere
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
@@ -35,7 +39,7 @@ from fc.models.rule import Deduction, Rule, RuleStatus, Scope, Tolerance
 from fc.rules.backtest import BacktestResult, CaseTruth, HistoricalCase, backtest
 from fc.rules.evaluator import evaluate_deductions
 from fc.rules.learner import Resolution, detect_drafts
-from fc.rules.loader import version_hash
+from fc.rules.loader import RuleSourceError, build_ruleset_from_entries, version_hash
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -228,6 +232,154 @@ async def create_rule(
     result = rule_from_row(row)
     await finish(session, dry_run=dry_run)
     return result
+
+
+class RuleImportEntryOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    rule_id: str
+    version: int
+    outcome: Literal["created_v1", "created_version"]
+
+
+class RuleImportOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    created_count: int
+    results: list[RuleImportEntryOut]
+
+
+@router.post("/import", response_model=RuleImportOut, status_code=201)
+async def import_rules(
+    body: list[dict[str, Any]],
+    dry_run: bool = Query(False),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> RuleImportOut:
+    """Bulk-create rule drafts from an uploaded JSON file.
+
+    Entries use the same per-rule shape ``fc.rules.loader``'s YAML loader
+    accepts (``id``, ``scope``, ``deductions``, ``tolerance``, and the
+    optional fields it allows) — the whole point is that the same rulebook
+    file format works whether it is the seed ruleset or something a human
+    drops in here. Validation runs over the *entire* file before anything is
+    written: a bad entry at position 12 of 20 fails the whole import rather
+    than leaving 11 rules created and 9 silently skipped.
+
+    Every entry lands as ``status="draft"`` with ``origin="imported"``
+    regardless of what the file says (a rule is never born active — §8.8,
+    same invariant ``POST /rules`` enforces) and never overwrites an
+    existing ``rule_id``: one already present in this tenant gets the next
+    version instead, through the same ladder ``/versions`` uses. A file can
+    be re-uploaded to add versions without disturbing what is already there.
+    """
+    now = datetime.now(UTC)
+    try:
+        parsed = build_ruleset_from_entries(
+            body,
+            source_label="upload",
+            tenant_id=user.tenant_id,
+            created_at=now,
+            default_status="draft",
+        )
+    except RuleSourceError as exc:
+        raise ApiError(422, "invalid rules file", str(exc)) from exc
+
+    results: list[RuleImportEntryOut] = []
+    for index, rule in enumerate(parsed):
+        latest = await session.scalar(
+            select(RuleRow)
+            .where(RuleRow.tenant_id == user.tenant_id, RuleRow.rule_id == rule.rule_id)
+            .order_by(RuleRow.version.desc())
+            .limit(1)
+        )
+        version = latest.version + 1 if latest is not None else 1
+        row = RuleRow(
+            rule_id=rule.rule_id,
+            version=version,
+            tenant_id=user.tenant_id,
+            version_hash=rule.version_hash,
+            name=rule.name,
+            description=rule.description,
+            scope=rule.scope.model_dump(mode="json", exclude_none=True),
+            deductions=[d.model_dump(mode="json") for d in rule.deductions],
+            tolerance=rule.tolerance.model_dump(mode="json"),
+            priority=rule.priority,
+            effective_confidence=rule.effective_confidence,
+            effective_from=rule.effective_from,
+            effective_to=rule.effective_to,
+            status="draft",
+            origin="imported",
+            created_by=user.user_id,
+            created_at=now,
+        )
+        session.add(row)
+        await session.flush()
+        await append_audit(
+            session,
+            tenant_id=user.tenant_id,
+            actor=f"user:{user.user_id}",
+            action="rule.import",
+            subject_type="rule",
+            subject_id=f"{rule.rule_id}:{version}",
+            payload={"version_hash": rule.version_hash, "dry_run": dry_run},
+            created_at=now,
+        )
+        results.append(
+            RuleImportEntryOut(
+                index=index,
+                rule_id=rule.rule_id,
+                version=version,
+                outcome="created_version" if latest is not None else "created_v1",
+            )
+        )
+
+    await finish(session, dry_run=dry_run)
+    return RuleImportOut(created_count=len(results), results=results)
+
+
+@router.delete("/{rule_id}/versions/{version}", status_code=204)
+async def delete_draft_rule(
+    rule_id: str,
+    version: int,
+    dry_run: bool = Query(False),
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> None:
+    """Hard-deletes one rule version — only if it is still ``draft``.
+
+    A version that was ever ``active`` keeps existing through ``/retire`` (a
+    status change) and is never removable here — its audit trail and any
+    exception that cited it must stay intact. This exists for the case
+    bulk import creates: rules brought in for testing that turned out wrong
+    and were never activated, which retiring (a lifecycle event for a rule
+    that actually ran) is the wrong verb for. Migration
+    ``0005_rules_draft_delete`` is what makes DELETE possible at the
+    database layer at all; the status check below is the second half.
+    """
+    row = await session.get(RuleRow, {"rule_id": rule_id, "version": version})
+    if row is None:
+        raise ApiError(404, "not found", f"no rule {rule_id} version {version}")
+    if row.status != "draft":
+        raise ApiError(
+            409,
+            "invalid state",
+            f"rule {rule_id} v{version} is {row.status!r}, not draft — retire it instead "
+            "of deleting; a rule that was ever active must keep its history.",
+        )
+    await session.delete(row)
+    await append_audit(
+        session,
+        tenant_id=user.tenant_id,
+        actor=f"user:{user.user_id}",
+        action="rule.delete_draft",
+        subject_type="rule",
+        subject_id=f"{rule_id}:{version}",
+        payload={"dry_run": dry_run},
+        created_at=datetime.now(UTC),
+    )
+    await finish(session, dry_run=dry_run)
 
 
 @router.post("/preview", response_model=PreviewOut)

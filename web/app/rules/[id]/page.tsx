@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { use } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, Archive, GitBranchPlus } from "lucide-react";
+import { CheckCheck, Archive, GitBranchPlus, Trash2 } from "lucide-react";
 import { apiClient, type components } from "@/lib/client";
 import { formatPaise, humanizeSnakeCase, formatPercent } from "@/lib/format";
 import { queryKeys } from "@/lib/query-keys";
@@ -25,6 +25,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
   const router = useRouter();
   const queryClient = useQueryClient();
   const [retiring, setRetiring] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [draftingVersion, setDraftingVersion] = useState(false);
   const [versionDeductions, setVersionDeductions] = useState<DeductionDraft[]>([]);
   const [submittingVersion, setSubmittingVersion] = useState(false);
@@ -78,6 +79,19 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
     setRetiring(false);
     reload();
     router.refresh();
+  }
+
+  async function deleteDraft() {
+    if (!latest) return;
+    if (!window.confirm(`Delete draft ${id} v${latest.version}? This cannot be undone.`)) return;
+    setDeleting(true);
+    const { response } = await apiClient.DELETE("/api/v1/rules/{rule_id}/versions/{version}", {
+      params: { path: { rule_id: id, version: latest.version } },
+    });
+    setDeleting(false);
+    if (!response.ok) return;
+    reload();
+    router.push("/rules");
   }
 
   function openNewVersion() {
@@ -159,14 +173,25 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
         </div>
         <div className="flex items-center gap-2">
           {latest.status === "draft" && (
-            <button
-              type="button"
-              onClick={activate}
-              className="flex items-center gap-1.5 rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success"
-            >
-              <CheckCheck width={12} height={12} />
-              Activate
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={activate}
+                className="flex items-center gap-1.5 rounded-[7px] bg-success-bg px-3 py-1.5 text-xs font-semibold text-success"
+              >
+                <CheckCheck width={12} height={12} />
+                Activate
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={deleteDraft}
+                className="flex items-center gap-1.5 rounded-[7px] bg-error-bg px-3 py-1.5 text-xs font-semibold text-error disabled:opacity-50"
+              >
+                <Trash2 width={12} height={12} />
+                {deleting ? "Deleting…" : "Delete draft"}
+              </button>
+            </>
           )}
           {latest.status === "active" && (
             <>

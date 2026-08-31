@@ -147,19 +147,19 @@ export interface paths {
         };
         /**
          * Get Default Run
-         * @description The run the app opens on — pinned in tenant settings, not inferred.
+         * @description The run the app opens on: always the newest original, complete run.
          *
          *     Declared before ``/{run_id}`` so FastAPI matches the literal path first.
          *
-         *     Deriving the default from "newest original and complete" meant it moved
-         *     every time anyone reconciled anything: an upload made to test the ingest
-         *     slot became the run a judge sees on open. Pinning it in
-         *     ``tenants.settings.default_run_id`` makes what loads a decision somebody
-         *     took, and a run selector can still navigate away from it without the
-         *     default drifting.
-         *
-         *     Falls back to the newest original, complete run when nothing is pinned, or
-         *     when the pinned run has since been deleted — the app must still open.
+         *     This used to be pinnable in ``tenants.settings.default_run_id`` so a
+         *     reconciliation run wouldn't silently replace what a judge was looking
+         *     at. Nothing in this build ever wrote that key, though, so a stray value
+         *     seeded once during setup stuck a tenant on one run forever with no way
+         *     to point it anywhere else — every later reconciliation completed
+         *     correctly but never showed up here. "Always newest" is the behavior
+         *     every other screen already assumes (the trend chart on Reconcile pulls
+         *     the full run list unfiltered), so this just makes the default consistent
+         *     with that instead of independently stale.
          */
         get: operations["get_default_run_api_v1_runs_default_get"];
         put?: never;
@@ -302,6 +302,40 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ingest/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Ingested Files */
+        get: operations["list_ingested_files_api_v1_ingest_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ingest/files/{file_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Ingested File */
+        delete: operations["delete_ingested_file_api_v1_ingest_files__file_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -846,6 +880,70 @@ export interface paths {
          */
         post: operations["create_rule_version_api_v1_rules__rule_id__versions_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import Rules
+         * @description Bulk-create rule drafts from an uploaded JSON file.
+         *
+         *     Entries use the same per-rule shape ``fc.rules.loader``'s YAML loader
+         *     accepts (``id``, ``scope``, ``deductions``, ``tolerance``, and the
+         *     optional fields it allows) — the whole point is that the same rulebook
+         *     file format works whether it is the seed ruleset or something a human
+         *     drops in here. Validation runs over the *entire* file before anything is
+         *     written: a bad entry at position 12 of 20 fails the whole import rather
+         *     than leaving 11 rules created and 9 silently skipped.
+         *
+         *     Every entry lands as ``status="draft"`` with ``origin="imported"``
+         *     regardless of what the file says (a rule is never born active — §8.8,
+         *     same invariant ``POST /rules`` enforces) and never overwrites an
+         *     existing ``rule_id``: one already present in this tenant gets the next
+         *     version instead, through the same ladder ``/versions`` uses. A file can
+         *     be re-uploaded to add versions without disturbing what is already there.
+         */
+        post: operations["import_rules_api_v1_rules_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/{rule_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Draft Rule
+         * @description Hard-deletes one rule version — only if it is still ``draft``.
+         *
+         *     A version that was ever ``active`` keeps existing through ``/retire`` (a
+         *     status change) and is never removable here — its audit trail and any
+         *     exception that cited it must stay intact. This exists for the case
+         *     bulk import creates: rules brought in for testing that turned out wrong
+         *     and were never activated, which retiring (a lifecycle event for a rule
+         *     that actually ran) is the wrong verb for. Migration
+         *     ``0005_rules_draft_delete`` is what makes DELETE possible at the
+         *     database layer at all; the status check below is the second half.
+         */
+        delete: operations["delete_draft_rule_api_v1_rules__rule_id__versions__version__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1484,17 +1582,17 @@ export interface components {
         /** Body_ingest_bank_api_v1_ingest_bank_post */
         Body_ingest_bank_api_v1_ingest_bank_post: {
             /** File */
-            file: string;
+            file?: string | null;
         };
         /** Body_ingest_ledger_api_v1_ingest_ledger_post */
         Body_ingest_ledger_api_v1_ingest_ledger_post: {
             /** File */
-            file: string;
+            file?: string | null;
         };
         /** Body_ingest_razorpay_api_v1_ingest_razorpay_post */
         Body_ingest_razorpay_api_v1_ingest_razorpay_post: {
             /** File */
-            file: string;
+            file?: string | null;
         };
         /** Body_ingest_upload_api_v1_ingest_upload_post */
         Body_ingest_upload_api_v1_ingest_upload_post: {
@@ -2029,6 +2127,24 @@ export interface components {
             status: string;
             /** Record Count */
             record_count: number | null;
+        };
+        /** IngestedFileOut */
+        IngestedFileOut: {
+            /** File Id */
+            file_id: string;
+            /** Source */
+            source: string;
+            /** Filename */
+            filename: string;
+            /** Content Type */
+            content_type: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
         };
         /** LLMCallOut */
         LLMCallOut: {
@@ -2677,6 +2793,27 @@ export interface components {
              * @default 0.95
              */
             effective_confidence: string;
+        };
+        /** RuleImportEntryOut */
+        RuleImportEntryOut: {
+            /** Index */
+            index: number;
+            /** Rule Id */
+            rule_id: string;
+            /** Version */
+            version: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "created_v1" | "created_version";
+        };
+        /** RuleImportOut */
+        RuleImportOut: {
+            /** Created Count */
+            created_count: number;
+            /** Results */
+            results: components["schemas"]["RuleImportEntryOut"][];
         };
         /**
          * RuleVersionRequest
@@ -3646,10 +3783,77 @@ export interface operations {
             };
         };
     };
+    list_ingested_files_api_v1_ingest_files_get: {
+        parameters: {
+            query?: {
+                source?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestedFileOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_ingested_file_api_v1_ingest_files__file_id__delete: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                file_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ingest_razorpay_api_v1_ingest_razorpay_post: {
         parameters: {
             query: {
                 run_id: string;
+                source_file_id?: string | null;
                 dry_run?: boolean;
             };
             header?: {
@@ -3658,7 +3862,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_ingest_razorpay_api_v1_ingest_razorpay_post"];
             };
@@ -3689,6 +3893,7 @@ export interface operations {
             query: {
                 run_id: string;
                 opening_balance_paise: number;
+                source_file_id?: string | null;
                 dry_run?: boolean;
             };
             header?: {
@@ -3697,7 +3902,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_ingest_bank_api_v1_ingest_bank_post"];
             };
@@ -3727,6 +3932,7 @@ export interface operations {
         parameters: {
             query: {
                 run_id: string;
+                source_file_id?: string | null;
                 dry_run?: boolean;
             };
             header?: {
@@ -3735,7 +3941,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "multipart/form-data": components["schemas"]["Body_ingest_ledger_api_v1_ingest_ledger_post"];
             };
@@ -4756,6 +4962,79 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Rule"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_rules_api_v1_rules_import_post: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                }[];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleImportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_draft_rule_api_v1_rules__rule_id__versions__version__delete: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                rule_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
