@@ -49,7 +49,7 @@ from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode
 from api.ruleset import COMPOSITION_KEY, resolve_ruleset
 from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
-from db.models import EvalResult, ExceptionRow, Run, Tenant, TransactionEventRow
+from db.models import EvalResult, ExceptionRow, Run, TransactionEventRow
 from db.models import Match as MatchRow
 from fc.audit.replay import ReplayDiff, diff_exceptions, replay
 from fc.config import Config
@@ -199,45 +199,34 @@ async def list_runs(
     return Page(items=items, next_cursor=next_cursor)
 
 
-#: Key under ``tenants.settings`` naming the run the app opens on.
-DEFAULT_RUN_KEY = "default_run_id"
-
-
 @router.get("/default", response_model=RunOut)
 async def get_default_run(
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
 ) -> RunOut:
-    """The run the app opens on — pinned in tenant settings, not inferred.
+    """The run the app opens on: always the newest original, complete run.
 
     Declared before ``/{run_id}`` so FastAPI matches the literal path first.
 
-    Deriving the default from "newest original and complete" meant it moved
-    every time anyone reconciled anything: an upload made to test the ingest
-    slot became the run a judge sees on open. Pinning it in
-    ``tenants.settings.default_run_id`` makes what loads a decision somebody
-    took, and a run selector can still navigate away from it without the
-    default drifting.
-
-    Falls back to the newest original, complete run when nothing is pinned, or
-    when the pinned run has since been deleted — the app must still open.
+    This used to be pinnable in ``tenants.settings.default_run_id`` so a
+    reconciliation run wouldn't silently replace what a judge was looking
+    at. Nothing in this build ever wrote that key, though, so a stray value
+    seeded once during setup stuck a tenant on one run forever with no way
+    to point it anywhere else — every later reconciliation completed
+    correctly but never showed up here. "Always newest" is the behavior
+    every other screen already assumes (the trend chart on Reconcile pulls
+    the full run list unfiltered), so this just makes the default consistent
+    with that instead of independently stale.
     """
-    tenant = await session.get(Tenant, user.tenant_id)
-    pinned = (tenant.settings or {}).get(DEFAULT_RUN_KEY) if tenant else None
-    if isinstance(pinned, str):
-        row = await session.scalar(select(Run).where(Run.run_id == pinned, Run.status != "deleted"))
-        if row is not None:
-            return _run_out(row)
-
-    fallback = await session.scalar(
+    row = await session.scalar(
         select(Run)
         .where(Run.parent_run_id.is_(None), Run.status == "complete")
         .order_by(Run.started_at.desc(), Run.run_id.desc())
         .limit(1)
     )
-    if fallback is None:
+    if row is None:
         raise ApiError(404, "not found", "this tenant has no completed run yet")
-    return _run_out(fallback)
+    return _run_out(row)
 
 
 async def _load(session: AsyncSession, run_id: str) -> Run:
