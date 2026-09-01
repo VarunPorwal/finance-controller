@@ -47,7 +47,7 @@ from api.errors import ApiError
 from api.generation import generate_for_run
 from api.notify import notify_run_complete
 from api.pagination import DEFAULT_LIMIT, MAX_LIMIT, Page, decode_cursor, encode_cursor
-from api.ruleset import COMPOSITION_KEY, resolve_ruleset
+from api.ruleset import COMPOSITION_KEY, DEMO_RULE_SET, resolve_ruleset
 from api.run_scope import event_source_run_id
 from db.models import Cluster as ClusterRow
 from db.models import EvalResult, ExceptionRow, Run, Tenant, TransactionEventRow, User
@@ -115,6 +115,11 @@ class CreateRunRequest(BaseModel):
     #: bank,ledger} against this run_id and calls POST /runs/{run_id}/finalize
     #: to run the cascade over whatever was actually uploaded.
     mode: Literal["demo", "empty"] = "demo"
+    #: Which rulebook to reconcile against, by name. Ignored for ``mode
+    #: ="demo"``, which is pinned to ``DEMO_RULE_SET``. ``None`` means every
+    #: runnable rule, the behaviour from before rule sets existed;
+    #: ``NO_RULE_SET`` means run with no rulebook at all.
+    rule_set: str | None = None
 
 
 class DiffOut(BaseModel):
@@ -612,7 +617,13 @@ async def create_run(
     # for any run anyone could reach.
 
     run_id = new_ulid("run_")
-    ruleset = await resolve_ruleset(session, tenant_id=user.tenant_id)
+    # The demo corpus is pinned to its own rulebook and offers no choice. A
+    # judge pressing Run must get the rules that describe the demo data, not
+    # whichever set somebody uploaded last — which is precisely what happened
+    # while every upload retired every other set. Uploaded datasets pick their
+    # own set; see RunCreate.rule_set.
+    chosen_set = DEMO_RULE_SET if body.mode == "demo" else body.rule_set
+    ruleset = await resolve_ruleset(session, tenant_id=user.tenant_id, rule_set=chosen_set)
     issue_id = deterministic_factory(seed=body.seed, epoch_ms=int(started_at.timestamp() * 1000))
 
     # Secrets never land in an auditable JSONB column, even the config

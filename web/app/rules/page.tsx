@@ -115,6 +115,13 @@ export default function RuleBookPage() {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [rules]);
 
+  const [setFilter, setSetFilter] = useState<string | null>(null);
+  const [setDetailOpen, setSetDetailOpen] = useState(false);
+  const { data: ruleSets } = useQuery({
+    queryKey: ["rules", "sets"],
+    queryFn: async () => (await apiClient.GET("/api/v1/rules/sets")).data ?? [],
+  });
+
   const { data: affected = {} } = useQuery({
     queryKey: ["rules", "affected", latest.map((r) => `${r.rule_id}:${r.version}`)],
     queryFn: async () => {
@@ -204,6 +211,20 @@ export default function RuleBookPage() {
         </div>
       )}
 
+      {/*
+        Which rulebook is in play, before anything else on the page. A tenant
+        can hold several — the demo corpus's and each uploaded dataset's — and
+        a rule from a set this run does not use looks identical to one that is
+        live unless the page says so.
+      */}
+      <RuleSetBar
+        sets={ruleSets ?? []}
+        selected={setFilter}
+        onSelect={setSetFilter}
+        expanded={setDetailOpen}
+        onToggle={() => setSetDetailOpen((v) => !v)}
+      />
+
       <FilterPills options={FILTERS} active={status} onChange={setStatus} />
 
       <div className="grid grid-cols-2 gap-5">
@@ -211,14 +232,23 @@ export default function RuleBookPage() {
           const bt = affected[rule.rule_id];
           const key = `${rule.rule_id}:${rule.version}`;
           const busy = actingId === key;
+          const inSelectedSet =
+            setFilter === null || (rule.scope.rule_set ?? "default") === setFilter;
           return (
             <div
               key={rule.rule_id}
-              className="fc-card cursor-pointer"
+              className={
+                "fc-card cursor-pointer" + (inSelectedSet ? "" : " opacity-45 saturate-50")
+              }
               onClick={() => router.push(`/rules/${rule.rule_id}`)}
             >
               <div className="px-[22px] pt-5">
-                <div className="text-[15px] font-semibold">{rule.name}</div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <div className="text-[15px] font-semibold">{rule.name}</div>
+                  <span className="shrink-0 rounded-[5px] bg-[color:var(--neutral-bg)] px-1.5 py-0.5 text-[10.5px] text-text-muted">
+                    {rule.scope.rule_set ?? "default"}
+                  </span>
+                </div>
                 <div className="mt-[3px] text-xs text-text-muted">
                   {rule.scope.counterparty_matches ?? "Any counterparty"}
                 </div>
@@ -266,8 +296,15 @@ export default function RuleBookPage() {
                   </div>
                 )}
                 <div className="flex items-center justify-between border-t border-[color:var(--neutral-bg)] pt-3">
-                  <span className="text-xs text-text-muted">
-                    {bt ? `${bt.would_explain.count} transactions affected` : "…"}
+                  {/*
+                    A back-test figure, not a live count: it asks how many
+                    *already-resolved or written-off* exceptions this rule
+                    would have explained. On a tenant where nobody has closed
+                    anything by hand that set is empty, so every rule reads 0
+                    however well it works — which is what it was doing.
+                  */}
+                  <span className="text-xs text-text-muted" title="Back-tested against exceptions a human has already resolved or written off">
+                    {bt ? `${bt.would_explain.count} resolved cases explained` : "…"}
                   </span>
                   <span className="text-[12.5px] font-semibold text-primary">View rule →</span>
                 </div>
@@ -320,6 +357,90 @@ export default function RuleBookPage() {
             }}
           />
         </>
+      )}
+    </div>
+  );
+}
+
+
+/**
+ * The rule-set strip at the top of the Rulebook.
+ *
+ * Uploading a rulebook used to retire every active rule the tenant had, so
+ * only one dataset could be configured at a time and each upload permanently
+ * destroyed the previous set. Sets fixed that; this is what makes the fix
+ * visible, because "which rules are actually in play" is otherwise
+ * indistinguishable from "every rule ever uploaded".
+ */
+function RuleSetBar({
+  sets,
+  selected,
+  onSelect,
+  expanded,
+  onToggle,
+}: {
+  sets: components["schemas"]["RuleSetOut"][];
+  selected: string | null;
+  onSelect: (name: string | null) => void;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  if (sets.length === 0) return null;
+  const active = sets.find((s) => s.name === selected) ?? null;
+  return (
+    <div className="fc-card mb-4 px-[22px] py-3.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="text-text-heading text-[12.5px] font-semibold"
+        >
+          Rule set{active ? `: ${active.name}` : ": all"} {expanded ? "▾" : "▸"}
+        </button>
+        <div className="ml-auto flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => onSelect(null)}
+            className={
+              "rounded-[6px] px-2.5 py-1 text-[11.5px] font-medium " +
+              (selected === null
+                ? "bg-primary text-white"
+                : "border-border text-text-body border")
+            }
+          >
+            All
+          </button>
+          {sets.map((s) => (
+            <button
+              key={s.name}
+              type="button"
+              onClick={() => onSelect(s.name)}
+              className={
+                "rounded-[6px] px-2.5 py-1 text-[11.5px] font-medium " +
+                (selected === s.name
+                  ? "bg-primary text-white"
+                  : "border-border text-text-body border")
+              }
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      {expanded && (
+        <ul className="border-border mt-3 flex flex-col gap-1.5 border-t pt-3">
+          {sets.map((s) => (
+            <li key={s.name} className="flex items-baseline justify-between text-[12.5px]">
+              <span className="text-text-body">{s.name}</span>
+              <span className="text-text-muted text-[11.5px]">
+                {s.active_rule_count} active of {s.rule_count}
+                {s.updated_at
+                  ? ` · updated ${new Date(s.updated_at).toLocaleDateString("en-IN")}`
+                  : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

@@ -43,7 +43,13 @@ from fc.models.transaction import TransactionEvent, is_bank_account
 from fc.rules.apply import apply_rules
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
 
-__all__ = ["PIPELINE_STAGES", "PipelineResult", "main", "run_pipeline"]
+__all__ = [
+    "PIPELINE_STAGES",
+    "PipelineResult",
+    "main",
+    "reconcilable_events",
+    "run_pipeline",
+]
 
 #: A marketplace payout's Tally Receipt narrates the settlement it closes as
 #: "Settlement credit {settlement_id}" (``fc.generator.tally_gen``). This is
@@ -82,6 +88,24 @@ PIPELINE_STAGES: Final[tuple[str, ...]] = (
 #: vendor debits on the statement with nothing to match against and turns each
 #: of them into a false "unbooked" finding.
 _CASH_SIDE_VOUCHERS: Final[frozenset[str]] = frozenset({"Receipt", "Payment", "Contra"})
+
+
+def reconcilable_events(
+    events: Sequence[TransactionEvent], *, cfg: Config
+) -> tuple[TransactionEvent, ...]:
+    """The events the matching cascade is allowed to consider.
+
+    A daybook row whose voucher never moves the bank account — a Sales invoice
+    against a debtor, a fee Journal against Bank Charges, a Credit Note — has
+    no bank counterpart by construction and is excluded. Public because the
+    *eval harness must exclude exactly the same rows*: a metric that counts
+    pairs the engine was told not to consider is measuring the gap between the
+    harness and the pipeline, not the engine's accuracy. On the reference
+    corpus that is 759 of 1,575 events, and it held recall at 24% while
+    precision sat at 99.97%.
+    """
+    bank_ledgers = cfg.bank_ledger_name_set
+    return tuple(e for e in events if e.source != "ledger" or _touches_bank_ledger(e, bank_ledgers))
 
 
 def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) -> bool:
@@ -207,10 +231,7 @@ def run_pipeline(
     # `events` (and therefore in `by_id` below and in the persisted corpus)
     # so anything explaining a decision can still look them up — excluded
     # from matching, not deleted.
-    bank_ledgers = cfg.bank_ledger_name_set
-    reconcilable = tuple(
-        e for e in events if e.source != "ledger" or _touches_bank_ledger(e, bank_ledgers)
-    )
+    reconcilable = reconcilable_events(events, cfg=cfg)
     cascade = run_cascade(
         reconcilable,
         cfg=cfg,
@@ -222,7 +243,9 @@ def run_pipeline(
 
     rule_gaps = _all_rule_gaps(events, rules, cfg=cfg, aliases=aliases)
 
-    lanes = assign_lanes(events, bank_ledger_names=bank_ledgers, ledger_refs=cascade.ledger_refs)
+    lanes = assign_lanes(
+        events, bank_ledger_names=cfg.bank_ledger_name_set, ledger_refs=cascade.ledger_refs
+    )
     classified = classify_exceptions(reconcilable, cascade, rule_gaps=rule_gaps, lanes=lanes)
     tier_decisions = [
         tier_for(
@@ -309,7 +332,9 @@ def run_pipeline(
             )
         )
 
-    cash_bridge = compute_cash_bridge(events, exceptions, cascade.matches, lanes=lanes)
+    cash_bridge = compute_cash_bridge(
+        events, exceptions, cascade.matches, lanes=lanes, as_of=created_at.date()
+    )
 
     return PipelineResult(
         events=events,

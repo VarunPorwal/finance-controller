@@ -46,7 +46,7 @@ from api.routers import eval as eval_router
 from api.routers import (
     settings as settings_router,
 )
-from api.ruleset import seed_rules_from_yaml
+from api.ruleset import seed_bundled_rule_sets, seed_rules_from_yaml
 from fc.config import Config
 
 
@@ -71,8 +71,12 @@ async def _seed_rules(cfg: Config) -> None:
         return
     try:
         async with scoped_session(cfg.tenant_id, "owner") as session:
-            inserted = await seed_rules_from_yaml(
-                session, tenant_id=cfg.tenant_id, created_at=datetime.now(UTC)
+            now = datetime.now(UTC)
+            inserted = await seed_rules_from_yaml(session, tenant_id=cfg.tenant_id, created_at=now)
+            # Every rulebook the repo ships, each into its own set, so having
+            # the second dataset configured never costs you the demo's rules.
+            inserted += await seed_bundled_rule_sets(
+                session, tenant_id=cfg.tenant_id, created_at=now
             )
             await session.commit()
         _LOG.info("rule seed: %d rule version(s) imported for %s", inserted, cfg.tenant_id)

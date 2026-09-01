@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from fc.models.transaction import Source
 
 __all__ = [
+    "DEFAULT_RULE_SET",
     "Deduction",
     "DeductionBasis",
     "DeductionStackItem",
@@ -64,11 +65,27 @@ Method = Literal["card", "upi", "netbanking", "wallet", "emi"]
 Rail = Literal["neft", "rtgs", "imps", "upi", "nach", "internal"]
 
 
+#: The default set a rule belongs to when a file does not name one.
+DEFAULT_RULE_SET = "default"
+
+
 class Scope(BaseModel):
     """Which transactions a rule applies to. All present clauses must match."""
 
     model_config = ConfigDict(extra="forbid")
 
+    #: Which rulebook this rule came from — a name, not a clause.
+    #:
+    #: It rides here because the scope is already a JSONB column and this
+    #: needs no migration to store, but it is deliberately *not* part of what
+    #: the rule does: it is excluded from :func:`~fc.rules.loader.version_hash`
+    #: and from :attr:`specificity`, so two identical rules in two different
+    #: sets still hash identically and neither out-specifies the other.
+    #:
+    #: Without it, uploading a rulebook retired every active rule the tenant
+    #: had — so two datasets could not be configured at once, and each upload
+    #: permanently killed the previous one, retirement being one-way.
+    rule_set: str | None = None
     counterparty_matches: list[str] | None = None  # normalised, case-insensitive
     narration_contains: list[str] | None = None
     source: Source | None = None
@@ -83,6 +100,7 @@ class Scope(BaseModel):
     def specificity(self) -> int:
         """Number of constraining clauses; ties in priority break on this (§6.7)."""
         clauses = (
+            # rule_set is provenance, not a constraint: see its docstring.
             self.counterparty_matches,
             self.narration_contains,
             self.source,

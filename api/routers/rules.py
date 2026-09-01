@@ -16,6 +16,7 @@ rather than at each call site.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
@@ -35,7 +36,7 @@ from db.models import Rule as RuleRow
 from fc.config import Config
 from fc.eval.confusion import ratio
 from fc.models.ids import new_ulid
-from fc.models.rule import Deduction, Rule, RuleStatus, Scope, Tolerance
+from fc.models.rule import DEFAULT_RULE_SET, Deduction, Rule, RuleStatus, Scope, Tolerance
 from fc.rules.backtest import BacktestResult, CaseTruth, HistoricalCase, backtest
 from fc.rules.evaluator import evaluate_deductions
 from fc.rules.learner import Resolution, detect_drafts
@@ -254,6 +255,9 @@ class RuleImportOut(BaseModel):
 async def import_rules(
     body: list[dict[str, Any]],
     dry_run: bool = Query(False),
+    rule_set: str | None = Query(
+        None, description="Which rule set this file belongs to. Only that set is replaced."
+    ),
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
 ) -> RuleImportOut:
@@ -269,11 +273,21 @@ async def import_rules(
 
     Every entry lands active immediately, origin="imported": uploading a
     rulebook replaces what is live rather than staging drafts next to it.
-    Every rule the tenant had active going in is retired first — stopped
-    outright, not just window-closed — so the import is a clean swap, not
-    an overlay. Skips the reason-per-activation prompt the single-rule
-    ``/activate`` endpoint requires, since an import is one human decision
-    covering the whole file, not one per rule.
+
+    **Replacement is scoped to one rule set.** Only rules already in the set
+    being uploaded are retired; every other set is left alone. Retiring all of
+    them, which is what this did, meant a tenant could have exactly one
+    rulebook configured at a time — upload the second dataset's rules and the
+    demo corpus's retired, upload the demo's back and the second dataset's
+    retired — and since retirement is one-way, each swap permanently destroyed
+    the set before it.
+
+    The set name comes from ``rule_set`` in the query, or from a ``rule_set``
+    key on the entries themselves, and defaults to ``DEFAULT_RULE_SET``.
+
+    Skips the reason-per-activation prompt the single-rule ``/activate``
+    endpoint requires, since an import is one human decision covering the whole
+    file, not one per rule.
     """
     now = datetime.now(UTC)
     try:
@@ -283,15 +297,23 @@ async def import_rules(
             tenant_id=user.tenant_id,
             created_at=now,
             default_status="active",
+            rule_set=rule_set or DEFAULT_RULE_SET,
         )
     except RuleSourceError as exc:
         raise ApiError(422, "invalid rules file", str(exc)) from exc
 
-    previously_active = (
-        await session.scalars(
-            select(RuleRow).where(RuleRow.tenant_id == user.tenant_id, RuleRow.status == "active")
-        )
-    ).all()
+    target_set = _set_of_rules(parsed)
+    previously_active = [
+        row
+        for row in (
+            await session.scalars(
+                select(RuleRow).where(
+                    RuleRow.tenant_id == user.tenant_id, RuleRow.status == "active"
+                )
+            )
+        ).all()
+        if _row_rule_set(row) == target_set
+    ]
     retired_ids = [f"{r.rule_id}:{r.version}" for r in previously_active]
     for prior in previously_active:
         prior.status = "retired"
@@ -305,7 +327,7 @@ async def import_rules(
             action="rule.retire_for_import",
             subject_type="rule",
             subject_id="bulk",
-            payload={"retired": retired_ids, "dry_run": dry_run},
+            payload={"retired": retired_ids, "rule_set": target_set, "dry_run": dry_run},
             created_at=now,
         )
 
@@ -489,6 +511,62 @@ def _bucket_out(bucket: object) -> BacktestBucketOut:
         total_paise=bucket.total_paise,  # type: ignore[attr-defined]
         exception_ids=list(bucket.exception_ids),  # type: ignore[attr-defined]
     )
+
+
+def _row_rule_set(row: RuleRow) -> str:
+    """Which set a stored rule belongs to; unnamed rules are the default set."""
+    scope = row.scope if isinstance(row.scope, dict) else {}
+    value = scope.get("rule_set")
+    return value if isinstance(value, str) and value else DEFAULT_RULE_SET
+
+
+def _set_of_rules(parsed: Sequence[Rule]) -> str:
+    names = {r.scope.rule_set or DEFAULT_RULE_SET for r in parsed}
+    if len(names) > 1:
+        raise ApiError(
+            422,
+            "invalid rules file",
+            f"one upload is one rule set; this file names {sorted(names)}",
+        )
+    return next(iter(names), DEFAULT_RULE_SET)
+
+
+class RuleSetOut(BaseModel):
+    """One named rulebook, and enough about it to choose between them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    rule_count: int
+    active_rule_count: int
+    updated_at: datetime | None
+
+
+@router.get("/sets", response_model=list[RuleSetOut])
+async def list_rule_sets(
+    session: AsyncSession = Depends(db_session),
+    user: AuthenticatedUser = Depends(current_user),
+) -> list[RuleSetOut]:
+    """Every rule set this tenant has, newest activity first.
+
+    The ingestion screen offers these by name, so a run can be pointed at the
+    rulebook that actually describes its data instead of whichever one was
+    uploaded last.
+    """
+    rows = (await session.scalars(select(RuleRow).where(RuleRow.tenant_id == user.tenant_id))).all()
+    grouped: dict[str, list[RuleRow]] = {}
+    for row in rows:
+        grouped.setdefault(_row_rule_set(row), []).append(row)
+    out = [
+        RuleSetOut(
+            name=name,
+            rule_count=len(members),
+            active_rule_count=sum(1 for m in members if m.status == "active"),
+            updated_at=max((m.created_at for m in members), default=None),
+        )
+        for name, members in grouped.items()
+    ]
+    return sorted(out, key=lambda s: (s.updated_at is None, s.updated_at), reverse=True)
 
 
 def _backtest_out(result: BacktestResult) -> BacktestOut:

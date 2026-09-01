@@ -207,13 +207,16 @@ def summarise(result: Any) -> None:
 
     books = bridge.books_vs_bank
     print("\n=== BOOKS vs BANK ===")
-    print(f"  per the books           {fmt_inr(books.books_movement_paise)}")
-    print(f"  per the bank            {fmt_inr(books.bank_movement_paise)}")
+    print(f"  opening balance         {fmt_inr(books.opening_balance_paise)}")
+    print(f"  per the books           {fmt_inr(books.books_balance_paise)}")
+    print(f"  per the bank            {fmt_inr(books.bank_balance_paise)}")
     print(f"  difference              {fmt_inr(books.difference_paise)}")
     print(f"    timing                {fmt_inr(books.timing_paise)}")
     print(f"    unrecorded in books   {fmt_inr(books.unrecorded_in_books_paise)}")
     print(f"    under investigation   {fmt_inr(books.under_investigation_paise)}")
-    print(f"    unexplained           {fmt_inr(books.unexplained_paise)}")
+    print(f"    unidentified inflows  {fmt_inr(books.unidentified_inflow_paise)}")
+    print(f"    matched residual      {fmt_inr(books.matched_residual_paise)}")
+    print(f"  gateway bridge gap      {fmt_inr(books.unexplained_paise)}")
 
     print("\n=== CASH BRIDGE ===")
     print(f"  gross collected      {fmt_inr(bridge.gross_collected_paise)}")

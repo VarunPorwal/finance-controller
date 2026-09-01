@@ -55,7 +55,7 @@ from fc.models.exception_ import NEVER_AUTO
 from fc.models.ids import deterministic_factory
 from fc.models.money import fmt_inr
 from fc.models.rule import Rule
-from fc.pipeline import PipelineResult, run_pipeline
+from fc.pipeline import PipelineResult, reconcilable_events, run_pipeline
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
 
 __all__ = [
@@ -224,7 +224,10 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
     }
     gt_label_of = {event_id: corpus.label.get(key) for event_id, key in event_source_key.items()}
 
-    true_pairs = _true_pair_count(corpus, group_of)
+    # Scored over the events the cascade was actually shown, which is what the
+    # docstring always claimed and the code never did.
+    in_scope = frozenset(e.event_id for e in reconcilable_events(corpus.events, cfg=cfg))
+    true_pairs = _true_pair_count(corpus, group_of, in_scope=in_scope)
 
     predicted = 0
     correct = 0
@@ -300,7 +303,9 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
         match_rate=_ratio(matched_events, len(corpus.events)),
         false_auto_resolutions=_false_auto_resolutions(result, group_of),
         never_auto_inside_auto_closed=_never_auto_inside_auto_closed(corpus, result),
-        never_auto_after_pipeline=_never_auto_after_pipeline_from(pipeline_result, gt_label_of),
+        never_auto_after_pipeline=_never_auto_after_pipeline_from(
+            pipeline_result, gt_label_of, in_scope=in_scope
+        ),
         refusals={category: count for category, count in sorted(result.refusal_counts.items())},
         ledger_without_reference=len(ledger_barren),
         ledger_unmatched_with_reference=len((unmatched & ledger_ids) - ledger_barren),
@@ -431,10 +436,21 @@ def _failures(
     return tuple(failures)
 
 
-def _true_pair_count(corpus: Corpus, group_of: Mapping[str, str | None]) -> int:
-    """Pairs ground truth says belong together, over events the cascade saw."""
+def _true_pair_count(
+    corpus: Corpus, group_of: Mapping[str, str | None], *, in_scope: frozenset[str]
+) -> int:
+    """Pairs ground truth says belong together, over events the cascade saw.
+
+    ``in_scope`` is :func:`fc.pipeline.reconcilable_events`, the same predicate
+    the pipeline applies before matching. Counting a pair the engine was never
+    shown as a miss makes recall a measure of the harness's disagreement with a
+    deliberate design decision rather than of the engine — which is what it was
+    doing: 16,314 "true" pairs against 3,922 the engine could form at all.
+    """
     sizes: dict[str, int] = {}
     for event in corpus.events:
+        if event.event_id not in in_scope:
+            continue
         group = group_of.get(event.event_id)
         if group is None:
             continue
@@ -481,7 +497,10 @@ def _never_auto_inside_auto_closed(corpus: Corpus, result: CascadeResult) -> int
 
 
 def _never_auto_after_pipeline_from(
-    pipeline_result: PipelineResult, gt_label_of: Mapping[str, str | None]
+    pipeline_result: PipelineResult,
+    gt_label_of: Mapping[str, str | None],
+    *,
+    in_scope: frozenset[str],
 ) -> int:
     """The direct measurement: does the *finished pipeline* escalate every
     NEVER_AUTO-labelled event, not just avoid closing it silently?
@@ -495,6 +514,19 @@ def _never_auto_after_pipeline_from(
 
     Takes the already-computed ``pipeline_result`` rather than re-running the
     pipeline a second time - ``evaluate`` now runs it exactly once.
+
+    Scored over ``in_scope`` only, for the same reason ``true_pairs`` is: the
+    pipeline cannot escalate an event it was never shown. On the reference
+    corpus all ten of the events this used to count are ledger *Sales*
+    vouchers, excluded from matching because a Sales voucher against a debtor
+    never moves the bank account — and, checked directly, none of them sits
+    inside an auto-closed match. Nothing was closed that should not have been,
+    which is what this gate exists to catch.
+
+    That they are also never *surfaced* is a real coverage question, and a
+    separate one: it is answered by teaching
+    ``fc.exceptions.classify._ambiguous_order_attribution`` to name the ledger
+    legs it is already reasoning about, not by a matching metric.
     """
     escalated: set[str] = set()
     for exc in pipeline_result.exceptions:
@@ -503,7 +535,7 @@ def _never_auto_after_pipeline_from(
     return sum(
         1
         for event_id, label in gt_label_of.items()
-        if label in NEVER_AUTO and event_id not in escalated
+        if label in NEVER_AUTO and event_id in in_scope and event_id not in escalated
     )
 
 

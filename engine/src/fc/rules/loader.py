@@ -112,8 +112,15 @@ def canonical_semantics(scope: Scope, deductions: Sequence[Deduction], tolerance
     scope keys are sorted because a mapping has no order to preserve.
     """
     payload = {
+        # ``rule_set`` is excluded: it says which rulebook a rule arrived in,
+        # not what the rule does, and folding it in would give the same rule
+        # two different version hashes in two different sets — which is exactly
+        # what makes a hash useless as the provenance stamp on a closed
+        # exception.
         "scope": {
-            key: _plain(value) for key, value in sorted(scope.model_dump(exclude_none=True).items())
+            key: _plain(value)
+            for key, value in sorted(scope.model_dump(exclude_none=True).items())
+            if key != "rule_set"
         },
         "deductions": [
             {
@@ -156,12 +163,17 @@ def load_rules(
     tenant_id: str,
     created_at: datetime,
     default_status: str = "active",
+    rule_set: str | None = None,
 ) -> RuleSet:
     """Load and validate one Appendix D rules file.
 
     ``created_at`` is supplied rather than read from the clock: loading the same
     file twice must produce identical ``Rule`` objects, and a wall-clock read in
     a load path is a determinism bug waiting for a slow disk (hard rule 9).
+
+    YAML is a superset of JSON, so the same loader reads a ``.json`` rulebook —
+    which is what lets a bundled dataset's rules seed through exactly the path
+    the starter pack uses, rather than a parallel one that drifts from it.
     """
     source = Path(path)
     try:
@@ -179,6 +191,7 @@ def load_rules(
         tenant_id=tenant_id,
         created_at=created_at,
         default_status=default_status,
+        rule_set=rule_set,
     )
     stat = source.stat()
     return RuleSet(
@@ -216,6 +229,7 @@ def build_ruleset_from_entries(
     tenant_id: str,
     created_at: datetime,
     default_status: str = "active",
+    rule_set: str | None = None,
 ) -> tuple[Rule, ...]:
     """The validation core of :func:`load_rules`, without the file I/O.
 
@@ -233,7 +247,9 @@ def build_ruleset_from_entries(
             f"{source_label}: expected a list of rules, got {type(entries).__name__}"
         )
     rules = tuple(
-        _build_rule(entry, index, Path(source_label), tenant_id, created_at, default_status)
+        _build_rule(
+            entry, index, Path(source_label), tenant_id, created_at, default_status, rule_set
+        )
         for index, entry in enumerate(entries)
     )
     _reject_duplicate_versions(rules, Path(source_label))
@@ -247,6 +263,7 @@ def _build_rule(
     tenant_id: str,
     created_at: datetime,
     default_status: str,
+    rule_set: str | None = None,
 ) -> Rule:
     where = f"{source}[{index}]"
     if not isinstance(entry, dict):
@@ -258,6 +275,12 @@ def _build_rule(
         raise RuleSourceError(f"{where}: 'id' is required and must be a non-empty string")
 
     scope = _build_scope(body.pop("scope", None), where)
+    # An explicit `rule_set:` inside the file wins; the caller's name is the
+    # fallback, so uploading the same file under a new name re-homes it.
+    named = body.pop("rule_set", None)
+    chosen = named if isinstance(named, str) and named.strip() else rule_set
+    if chosen:
+        scope = scope.model_copy(update={"rule_set": chosen})
     deductions = _build_deductions(body.pop("deductions", None), where)
     tolerance = _build_tolerance(body.pop("tolerance", None), where)
     _reject_unbounded_stack(deductions, where)

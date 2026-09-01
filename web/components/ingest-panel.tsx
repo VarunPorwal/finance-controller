@@ -48,6 +48,12 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
     bank: { ...EMPTY_SLOT },
     ledger: { ...EMPTY_SLOT },
   });
+  //: The server's "run with no rulebook at all" sentinel, distinct from
+  //: "not specified" (which means every active rule).
+  const NO_RULE_SET = "__none__";
+  // Defaults to the last set used in this browser session, which is what a
+  // second upload of the same dataset almost always wants.
+  const [ruleSet, setRuleSet] = useState<string | null>(null);
   const [demoRunning, setDemoRunning] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
@@ -104,6 +110,11 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
     void queryClient.invalidateQueries({ queryKey: ["ingest", "files"] });
   }
 
+  const { data: ruleSets } = useQuery({
+    queryKey: ["rules", "sets"],
+    queryFn: async () => (await apiClient.GET("/api/v1/rules/sets")).data ?? [],
+  });
+
   async function runDemoCorpus() {
     setDemoRunning(true);
     setDemoError(null);
@@ -135,7 +146,7 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
     if (runId) return runId;
     try {
       const { data, error } = await apiClient.POST("/api/v1/runs", {
-        body: { mode: "empty", seed: 7 },
+        body: { mode: "empty", seed: 7, rule_set: ruleSet },
       });
       if (error || !data) return null;
       setRunId(data.run_id);
@@ -269,6 +280,30 @@ export function IngestPanel({ onComplete }: { onComplete: () => void }) {
           <p className="text-text-body mb-3 text-xs font-medium uppercase tracking-wide">
             Or upload your own {runId && <span className="fc-numeric text-text-muted">· {runId}</span>}
           </p>
+
+          {/*
+            Which rulebook this data should be reconciled against. Uploaded
+            data gets the choice; the demo corpus above does not, because it is
+            pinned to its own set server-side — a judge pressing Run must get
+            the rules that describe the demo data, never whichever set was
+            uploaded most recently.
+          */}
+          <label className="mb-3 flex items-center gap-2 text-xs">
+            <span className="text-text-body">Rule set</span>
+            <select
+              value={ruleSet ?? ""}
+              onChange={(e) => setRuleSet(e.target.value || null)}
+              className="border-border bg-background text-text-heading rounded-md border p-1"
+            >
+              <option value="">All active rules</option>
+              {(ruleSets ?? []).map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name} · {s.active_rule_count} active
+                </option>
+              ))}
+              <option value={NO_RULE_SET}>No rules</option>
+            </select>
+          </label>
 
           <label className="mb-3 flex items-center gap-2 text-xs">
             <span className="text-text-body">Bank opening balance ₹</span>

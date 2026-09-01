@@ -48,13 +48,16 @@ from api.converters import rule_from_row
 from api.errors import ApiError
 from db.models import Rule as RuleRow
 from db.models import Run, User
-from fc.models.rule import Rule
+from fc.models.rule import DEFAULT_RULE_SET, Rule
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules, ruleset_hash
 
 __all__ = [
     "ResolvedRuleset",
     "composition_of",
     "resolve_ruleset",
+    "NO_RULE_SET",
+    "rule_set_of",
+    "seed_bundled_rule_sets",
     "seed_rules_from_yaml",
 ]
 
@@ -88,12 +91,54 @@ def composition_of(run: Run) -> list[str] | None:
     return None
 
 
+#: The set the starter rulebook belongs to. The demo corpus is pinned to it:
+#: a judge pressing Run must get the rulebook that describes the demo data,
+#: never whichever set happened to be uploaded last.
+DEMO_RULE_SET = "demo-corpus"
+
+#: The explicit "run this with no rulebook at all" choice, offered in the
+#: ingestion selector. Distinct from ``None``, which means "not specified".
+NO_RULE_SET = "__none__"
+
+#: Rulebooks shipped alongside the demo one, seeded so a second dataset is
+#: configurable without retiring the first. ``(set name, path)``.
+BUNDLED_RULE_SETS: tuple[tuple[str, Path], ...] = (
+    (
+        "dataset-v2",
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "datasets"
+        / "v2"
+        / "recon_rules_v2_array.json",
+    ),
+)
+
+
+async def seed_bundled_rule_sets(
+    session: AsyncSession, *, tenant_id: str, created_at: datetime
+) -> int:
+    """Seed every rulebook that ships with the repo, each into its own set.
+
+    Separate sets are the whole point: before them, having the second dataset's
+    rules configured meant the demo's were retired, and retirement is one-way.
+    """
+    total = 0
+    for name, path in BUNDLED_RULE_SETS:
+        if not path.exists():
+            continue
+        total += await seed_rules_from_yaml(
+            session, tenant_id=tenant_id, created_at=created_at, path=path, rule_set=name
+        )
+    return total
+
+
 async def seed_rules_from_yaml(
     session: AsyncSession,
     *,
     tenant_id: str,
     created_at: datetime,
     path: Path | str = DEFAULT_RULES_PATH,
+    rule_set: str = DEMO_RULE_SET,
 ) -> int:
     """Import the YAML ruleset into ``rules`` for ``tenant_id``. Returns rows inserted.
 
@@ -114,7 +159,7 @@ async def seed_rules_from_yaml(
     if actor is None:
         return 0
 
-    ruleset = load_rules(path, tenant_id=tenant_id, created_at=created_at)
+    ruleset = load_rules(path, tenant_id=tenant_id, created_at=created_at, rule_set=rule_set)
     existing = {
         (rule_id, version)
         for rule_id, version in (
@@ -156,17 +201,38 @@ async def seed_rules_from_yaml(
     return inserted
 
 
+def rule_set_of(row: RuleRow) -> str:
+    """Which set a stored rule belongs to; unnamed rules are the default set."""
+    scope = row.scope if isinstance(row.scope, dict) else {}
+    value = scope.get("rule_set")
+    return value if isinstance(value, str) and value else DEFAULT_RULE_SET
+
+
 async def resolve_ruleset(
-    session: AsyncSession, *, tenant_id: str, target_hash: str | None = None
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    target_hash: str | None = None,
+    rule_set: str | None = None,
 ) -> ResolvedRuleset:
     """The ruleset a run should use.
 
     ``target_hash`` pins the result to the composition a previous run recorded
     under that ``ruleset_hash``; omitted, it is everything runnable for the
     tenant right now.
+
+    ``rule_set`` narrows that to one named rulebook. A run should be scored
+    against the rules that describe *its* data: with several sets configured,
+    "everything runnable" is several rulebooks at once, and rules scoped to
+    another dataset's counterparties are at best inert and at worst wrong.
+    ``NO_RULE_SET`` runs with no rules at all, which is a legitimate choice and
+    has to be distinguishable from "not specified".
     """
     if target_hash is not None:
         return await _resolve_by_hash(session, tenant_id=tenant_id, target_hash=target_hash)
+
+    if rule_set == NO_RULE_SET:
+        return ResolvedRuleset(rules=(), ruleset_hash=ruleset_hash(()), composition=())
 
     rows = (
         await session.scalars(
@@ -175,6 +241,8 @@ async def resolve_ruleset(
             .order_by(RuleRow.rule_id, RuleRow.version)
         )
     ).all()
+    if rule_set is not None:
+        rows = [r for r in rows if rule_set_of(r) == rule_set]
     rules = tuple(rule_from_row(r) for r in rows)
     return ResolvedRuleset(rules=rules, ruleset_hash=ruleset_hash(rules))
 

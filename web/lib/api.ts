@@ -917,11 +917,21 @@ export interface paths {
          *
          *     Every entry lands active immediately, origin="imported": uploading a
          *     rulebook replaces what is live rather than staging drafts next to it.
-         *     Every rule the tenant had active going in is retired first — stopped
-         *     outright, not just window-closed — so the import is a clean swap, not
-         *     an overlay. Skips the reason-per-activation prompt the single-rule
-         *     ``/activate`` endpoint requires, since an import is one human decision
-         *     covering the whole file, not one per rule.
+         *
+         *     **Replacement is scoped to one rule set.** Only rules already in the set
+         *     being uploaded are retired; every other set is left alone. Retiring all of
+         *     them, which is what this did, meant a tenant could have exactly one
+         *     rulebook configured at a time — upload the second dataset's rules and the
+         *     demo corpus's retired, upload the demo's back and the second dataset's
+         *     retired — and since retirement is one-way, each swap permanently destroyed
+         *     the set before it.
+         *
+         *     The set name comes from ``rule_set`` in the query, or from a ``rule_set``
+         *     key on the entries themselves, and defaults to ``DEFAULT_RULE_SET``.
+         *
+         *     Skips the reason-per-activation prompt the single-rule ``/activate``
+         *     endpoint requires, since an import is one human decision covering the whole
+         *     file, not one per rule.
          */
         post: operations["import_rules_api_v1_rules_import_post"];
         delete?: never;
@@ -974,6 +984,30 @@ export interface paths {
          *     a hypothetical gross amount and returns it, nothing more.
          */
         post: operations["preview_rule_api_v1_rules_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/rules/sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Rule Sets
+         * @description Every rule set this tenant has, newest activity first.
+         *
+         *     The ingestion screen offers these by name, so a run can be pointed at the
+         *     rulebook that actually describes its data instead of whichever one was
+         *     uploaded last.
+         */
+        get: operations["list_rule_sets_api_v1_rules_sets_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1872,6 +1906,8 @@ export interface components {
              * @enum {string}
              */
             mode: "demo" | "empty";
+            /** Rule Set */
+            rule_set?: string | null;
         };
         /**
          * DecisionDiff
@@ -2933,6 +2969,20 @@ export interface components {
             results: components["schemas"]["RuleImportEntryOut"][];
         };
         /**
+         * RuleSetOut
+         * @description One named rulebook, and enough about it to choose between them.
+         */
+        RuleSetOut: {
+            /** Name */
+            name: string;
+            /** Rule Count */
+            rule_count: number;
+            /** Active Rule Count */
+            active_rule_count: number;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /**
          * RuleVersionRequest
          * @description A new version of an existing rule. ``rule_id`` comes from the path.
          *
@@ -3008,6 +3058,8 @@ export interface components {
          * @description Which transactions a rule applies to. All present clauses must match.
          */
         Scope: {
+            /** Rule Set */
+            rule_set?: string | null;
             /** Counterparty Matches */
             counterparty_matches?: string[] | null;
             /** Narration Contains */
@@ -5107,6 +5159,8 @@ export interface operations {
         parameters: {
             query?: {
                 dry_run?: boolean;
+                /** @description Which rule set this file belongs to. Only that set is replaced. */
+                rule_set?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -5196,6 +5250,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["api__routers__rules__PreviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_rule_sets_api_v1_rules_sets_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleSetOut"][];
                 };
             };
             /** @description Validation Error */

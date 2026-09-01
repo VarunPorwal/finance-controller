@@ -330,6 +330,15 @@ def _settled_without_bank_credit(
         if "bank" in match.sources_covered:
             bank_backed.update(match.event_ids)
 
+    # A settlement whose UTR appears on a bank row was paid, whatever the
+    # matcher made of it. It may have arrived short, or landed in a credit two
+    # settlements could each claim — both are real findings, and both are
+    # raised elsewhere, by the stage that can see the amount. Neither is "the
+    # payout never came", which is what this sweep exists to say and what makes
+    # its output the thing a controller chases the processor about.
+    banked_references = {e.utr for e in events if e.source == "bank" and e.utr}
+    banked_references |= {e.rrn for e in events if e.source == "bank" and e.rrn}
+
     by_settlement: dict[str, list[TransactionEvent]] = {}
     for event in events:
         if event.source == "razorpay" and event.settlement_id and not event.on_hold:
@@ -338,6 +347,42 @@ def _settled_without_bank_credit(
     out: list[Classified] = []
     for settlement_id, rows in sorted(by_settlement.items()):
         if any(row.event_id in bank_backed or row.event_id in covered for row in rows):
+            continue
+        banked = [row for row in rows if row.utr and row.utr in banked_references]
+        if banked:
+            # The credit arrived, and it did not agree. Saying "no bank credit
+            # was attributed" would be false, and saying nothing would leave a
+            # short-paid settlement with no finding of its own — which is how a
+            # ₹18,475.40 shortfall came to be described only as an orphan bank
+            # row on one side and an unmatched receipt on the other, with
+            # nothing naming the settlement they are both about.
+            net = sum(-r.amount_paise if r.direction == "debit" else r.amount_paise for r in rows)
+            received = sum(
+                e.bank_signed_paise
+                for e in events
+                if e.source == "bank" and e.utr and e.utr in {r.utr for r in banked}
+            )
+            shortfall = abs(net) - received
+            if shortfall:
+                rows = sorted(rows, key=lambda r: r.event_id)
+                out.append(
+                    Classified(
+                        event_ids=tuple(r.event_id for r in rows),
+                        category="amount_variance",
+                        amount_paise=abs(shortfall),
+                        residual_paise=abs(shortfall),
+                        reason=(
+                            f"settlement {settlement_id} released {fmt_inr(abs(net))} and the "
+                            f"bank credited {fmt_inr(received)} against the same UTR; "
+                            f"{fmt_inr(abs(shortfall))} of the payout is unaccounted for"
+                        ),
+                        confidence=Decimal(1),
+                        counterparty_norm=rows[0].counterparty_norm,
+                        rail=rows[0].rail,
+                        gross_paise=abs(net),
+                        gap_paise=abs(shortfall),
+                    )
+                )
             continue
         rows = sorted(rows, key=lambda r: r.event_id)
         net = sum(-r.amount_paise if r.direction == "debit" else r.amount_paise for r in rows)
