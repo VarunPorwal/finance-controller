@@ -7,12 +7,8 @@ import { formatPaise } from "@/lib/format";
 import { StatCard } from "@/components/ui/stat-card";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { queryKeys } from "@/lib/query-keys";
+import { CashBridgeOut, fetchCashBridge } from "./loader";
 
-type CashBridgeOut = components["schemas"]["CashBridgeOut"];
-
-export async function fetchCashBridge(runId: string): Promise<CashBridgeOut | null> {
-  return (await apiClient.GET("/api/v1/cash/bridge", { params: { query: { run_id: runId } } })).data ?? null;
-}
 
 export default function CashPage() {
   const { summary } = useRun();

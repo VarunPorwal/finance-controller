@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from fc.ingest.narration.base import narration_tag
+from fc.lanes import LaneMap, assign_lanes
 from fc.matching.cascade import CascadeResult
 from fc.matching.ledger_refs import LedgerRefIndex
 from fc.matching.stages import StageRefusal, reference_is_truncated
@@ -125,6 +127,7 @@ def classify_exceptions(
     cascade: CascadeResult,
     *,
     rule_gaps: Sequence[RuleGap] = (),
+    lanes: LaneMap | None = None,
 ) -> tuple[Classified, ...]:
     """Turn cascade leftovers, rule gaps and unbooked disputes into findings.
 
@@ -137,6 +140,7 @@ def classify_exceptions(
     trust the count of.
     """
     by_id = {event.event_id: event for event in events}
+    lanes = lanes if lanes is not None else assign_lanes(events)
     match_of: dict[str, MatchResult] = {
         event_id: match for match in cascade.matches for event_id in match.event_ids
     }
@@ -207,6 +211,9 @@ def classify_exceptions(
     for match in cascade.matches:
         if match.auto_closed or any(event_id in covered for event_id in match.event_ids):
             continue
+        if _nothing_to_report(match):
+            covered.update(match.event_ids)
+            continue
         found.append(_from_match(match, by_id))
         covered.update(match.event_ids)
 
@@ -228,10 +235,14 @@ def classify_exceptions(
         found.append(missing)
         covered.update(missing.event_ids)
 
+    for held in _booked_but_never_settled(events, cascade.ledger_refs, covered=covered):
+        found.append(held)
+        covered.update(held.event_ids)
+
     for event_id in cascade.unmatched_event_ids:
         if event_id in covered or event_id in silenced:
             continue
-        found.append(_from_unmatched(by_id[event_id], events))
+        found.append(_from_unmatched(by_id[event_id], events, lanes))
         covered.add(event_id)
 
     return tuple(found)
@@ -307,7 +318,18 @@ def _settled_without_bank_credit(
     matched rows — this only fires when *none* of a settlement's rows were
     ever attributed anywhere.
     """
-    matched = cascade.matched_event_ids
+    # A bank leg, not a match. A settlement whose gateway rows joined only a
+    # ledger receipt is matched, at confidence 1.00, and proves nothing about
+    # whether the money arrived: the processor's report and the merchant's
+    # books are both statements of what *should* have happened, and this sweep
+    # asks whether it did. Keying on ``matched_event_ids`` let a payout with no
+    # bank credit at all close silently on gateway-and-books agreement, which
+    # is the one outcome this function exists to prevent.
+    bank_backed: set[str] = set()
+    for match in cascade.matches:
+        if "bank" in match.sources_covered:
+            bank_backed.update(match.event_ids)
+
     by_settlement: dict[str, list[TransactionEvent]] = {}
     for event in events:
         if event.source == "razorpay" and event.settlement_id and not event.on_hold:
@@ -315,7 +337,7 @@ def _settled_without_bank_credit(
 
     out: list[Classified] = []
     for settlement_id, rows in sorted(by_settlement.items()):
-        if any(row.event_id in matched or row.event_id in covered for row in rows):
+        if any(row.event_id in bank_backed or row.event_id in covered for row in rows):
             continue
         rows = sorted(rows, key=lambda r: r.event_id)
         net = sum(-r.amount_paise if r.direction == "debit" else r.amount_paise for r in rows)
@@ -340,6 +362,58 @@ def _settled_without_bank_credit(
                 gross_paise=amount,
                 gap_paise=amount,
                 expected_resolution_date=settled_date,
+            )
+        )
+    return tuple(out)
+
+
+def _booked_but_never_settled(
+    events: Sequence[TransactionEvent],
+    ledger_refs: LedgerRefIndex,
+    *,
+    covered: set[str],
+) -> tuple[Classified, ...]:
+    """Revenue in the books against money the processor is still holding.
+
+    A payment captured with ``on_hold`` set has not settled and may never; it
+    is deliberately excluded from :func:`_settled_without_bank_credit`, because
+    a payout that was never released is not a payout that went missing. But the
+    sales invoice for it is already booked, and that is a cut-off problem with
+    a real answer — hold the revenue or reverse it — which nothing else in the
+    tree can see, since a held row simply never reaches the bank and so never
+    becomes a leftover anybody asks about.
+
+    Fires only where the books have actually recognised the order, so it is
+    evidence and not a lecture about the ``on_hold`` flag.
+    """
+    booked_order_ids: set[str] = set()
+    for event in events:
+        if event.source == "ledger":
+            booked_order_ids.update(ledger_refs.for_event(event.event_id).order_ids)
+
+    out: list[Classified] = []
+    for event in sorted(events, key=lambda e: e.event_id):
+        if event.source != "razorpay" or not event.on_hold or event.event_id in covered:
+            continue
+        if not event.order_id or event.order_id not in booked_order_ids:
+            continue
+        amount = abs(event.amount_paise) + (event.fee_paise or 0)
+        out.append(
+            Classified(
+                event_ids=(event.event_id,),
+                category="revenue_booked_not_settled",
+                amount_paise=amount,
+                residual_paise=amount,
+                reason=(
+                    f"order {event.order_id} is booked as a sale for {fmt_inr(amount)} but the "
+                    "payment is still on hold at the gateway and has never settled; the "
+                    "revenue is recognised against cash that has not been collected"
+                ),
+                confidence=Decimal(1),
+                counterparty_norm=event.counterparty_norm,
+                rail=event.rail,
+                gross_paise=amount,
+                gap_paise=amount,
             )
         )
     return tuple(out)
@@ -462,6 +536,37 @@ def _from_rule_gap(gap: RuleGap, ids: tuple[str, ...]) -> Classified:
     )
 
 
+def _nothing_to_report(match: MatchResult) -> bool:
+    """A group that did not auto-close but has nothing wrong with it.
+
+    Outside the gateway lane a movement has two sides, not three: a rent
+    payment, a POS terminal settlement and a marketplace payout are proven by
+    the statement and the daybook agreeing, and there is no third file to ask.
+    Such a group matched on amount, date and counterparty is a *fuzzy* match by
+    construction, so it is capped at 0.75 and may never auto-close (CLAUDE.md,
+    enforced by assertion) — and that cap is a statement about how the group
+    was proven, not a defect in it.
+
+    Treating the cap as a defect put 21 exactly-agreeing rent, salary, ad-spend
+    and vendor payments into a human queue with the category ``unknown``, which
+    is both untrue and the fastest way to make a queue unreadable. So a group
+    is passed over when it disagrees about nothing: no residual, no date shift
+    past the timing window, one candidate, and no gateway leg whose absence a
+    third source could have contradicted.
+
+    A gateway group is deliberately excluded from this and keeps the old
+    behaviour exactly: there a third file does exist, and a group that fails to
+    close there has a missing leg worth naming.
+    """
+    if "razorpay" in match.sources_covered:
+        return False
+    if match.residual_paise != 0:
+        return False
+    if max((leg.date_shift_days for leg in match.evidence), default=0) > _TIMING_LAG_DAYS:
+        return False
+    return max((leg.candidates_considered for leg in match.evidence), default=1) <= 1
+
+
 def _from_match(match: MatchResult, by_id: Mapping[str, TransactionEvent]) -> Classified:
     """A group that formed but did not clear the auto-close bar.
 
@@ -503,8 +608,10 @@ def _from_match(match: MatchResult, by_id: Mapping[str, TransactionEvent]) -> Cl
     )
 
 
-def _from_unmatched(event: TransactionEvent, all_events: Sequence[TransactionEvent]) -> Classified:
-    category, reason, expected = _classify_unmatched_event(event, all_events)
+def _from_unmatched(
+    event: TransactionEvent, all_events: Sequence[TransactionEvent], lanes: LaneMap
+) -> Classified:
+    category, reason, expected = _classify_unmatched_event(event, all_events, lanes)
     amount = abs(event.amount_paise)
     return Classified(
         event_ids=(event.event_id,),
@@ -522,9 +629,25 @@ def _from_unmatched(event: TransactionEvent, all_events: Sequence[TransactionEve
 
 
 def _classify_unmatched_event(
-    event: TransactionEvent, all_events: Sequence[TransactionEvent]
+    event: TransactionEvent, all_events: Sequence[TransactionEvent], lanes: LaneMap
 ) -> tuple[ExceptionCategory, str, date | None]:
-    if event.source == "bank" and event.rail == "nach":
+    """What a leftover row means, asked of the counterpart its lane actually has.
+
+    ``missing_in_gateway`` is a real finding for a bank credit that should have
+    a settlement behind it and does not. Asked of a rent RTGS, a GST challan or
+    a salary NACH it is nonsense — the gateway never had them, and saying so
+    put 61 rows into one queue where the six that mattered could not be seen.
+    So the question is scoped by lane: outside the gateway lane the counterpart
+    is the daybook, and a bank row with no daybook entry behind it is a
+    *booking that has not been made*, not money that has gone missing.
+    """
+    lane = lanes.lane(event.event_id)
+
+    # A batch line, not a single mandate. The tag is what says so: NACH names a
+    # sponsor-bank batch covering hundreds of mandates that no file here can
+    # decompose, while ACH names one direct debit, which has a counterpart in
+    # the books like any other payment and must not be excused as unexplodable.
+    if event.source == "bank" and narration_tag(event.raw_narration or "").startswith("NACH"):
         return (
             "nach_batch_unexploded",
             "NACH batch line; mandates are not decomposed by design",
@@ -556,8 +679,34 @@ def _classify_unmatched_event(
 
     if event.source == "razorpay":
         return "missing_in_bank", "settled by Razorpay; no matching bank credit found", None
+
     if event.source == "bank":
-        return "missing_in_gateway", "bank credit has no Razorpay settlement row", None
+        if lane == "gateway":
+            return "missing_in_gateway", "bank credit has no Razorpay settlement row", None
+        party = event.counterparty_norm or "an unnamed counterparty"
+        # Direction decides which finding this is, and the two are genuinely
+        # different work. Money that *arrived* and that no voucher, gateway row
+        # or reference accounts for cannot be resolved from the files at all —
+        # somebody has to be asked where it came from, and until they answer
+        # the amount is sitting safely in the account, not exposed. Money that
+        # *left* and was never written down is a booking that has not been made
+        # yet: the evidence is complete, the entry just does not exist, and the
+        # agent can propose it. Folding the two together is what made a
+        # ₹2,86,440 inward remittance read as exposure.
+        if event.direction == "credit":
+            return (
+                "unidentified_inflow",
+                f"{fmt_inr(abs(event.amount_paise))} arrived from {party} and nothing in "
+                "the gateway file or the daybook says what it settles",
+                None,
+            )
+        return (
+            "unbooked_bank_entry",
+            f"the statement paid {fmt_inr(abs(event.amount_paise))} to {party} in the "
+            f"{lane} lane and the daybook has no voucher for it",
+            None,
+        )
+
     return "missing_in_bank", "ledger entry has no bank leg behind it", None
 
 

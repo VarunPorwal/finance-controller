@@ -125,42 +125,45 @@ def trusted_references(
 def _net_paise(members: Sequence[TransactionEvent]) -> int:
     """Signed net using "money moving toward the account" as positive.
 
-    Bank and razorpay both use ``credit`` for that already. Tally does not:
-    a Receipt against the bank ledger books the increase as a *debit* (an
-    asset account, in Tally's own convention), so ledger's sign is the
-    opposite of the other two sources for the same movement of money, not a
-    variant spelling of it.
+    The per-row convention, and why a ledger row is not simply inverted, lives
+    on :attr:`TransactionEvent.bank_signed_paise`.
     """
-    total = 0
-    for e in members:
-        sign = 1 if e.direction == "credit" else -1
-        if e.source == "ledger":
-            sign = -sign
-        total += sign * e.amount_paise
-    return total
+    return sum(e.bank_signed_paise for e in members)
 
 
 def _bank_side_balances(
     unique: Sequence[str], by_id: dict[str, TransactionEvent], cfg: Config
 ) -> bool:
+    """Whether the bank leg agrees with the side that claims to *be* the money.
+
+    Each source states the same movement independently; they do not add. So
+    the check is bank-against-one-other-side, and which side is the right
+    comparand is not a matter of taste: the gateway is the processor's own
+    record of what it paid out, so where a gateway leg is present it is what
+    the bank credit must agree with. The ledger is the merchant's *claim*
+    about the same movement, and a claim that disagrees is the finding
+    (:mod:`fc.matching.three_way`), not a reason to withhold the group — the
+    duplicate-voucher case D7 exists for is precisely a group where bank and
+    gateway agree perfectly and the books do not.
+
+    This used to return ``True`` unconditionally as soon as the non-bank side
+    spanned two sources, deferring to three-way resolution — which then had no
+    balance check of its own for a group that arrived already three-way. The
+    two gaps lined up exactly: a settlement whose bank credit was ₹18,475
+    short of its gateway net, with a ledger receipt for the full amount,
+    formed at confidence 1.00 with ``residual_paise`` 0 and auto-closed. A
+    short payout is the one thing that must never close.
+    """
     bank = [by_id[e] for e in unique if by_id[e].source == "bank"]
     if not bank:
         return True
-    other = [by_id[e] for e in unique if by_id[e].source != "bank"]
-    if not other:
+    gateway = [by_id[e] for e in unique if by_id[e].source == "razorpay"]
+    ledger = [by_id[e] for e in unique if by_id[e].source == "ledger"]
+    comparand = gateway or ledger
+    if not comparand:
         return True
-    # Only a single other source: a razorpay settlement's rows decompose
-    # into one net figure, and so does a ledger voucher's, but the two
-    # together do not simply add — a ledger Receipt mirrors the same bank
-    # credit a razorpay settlement's rows already net to, not a second
-    # contribution on top of it. Correctly reconciling that combined
-    # arithmetic is §6.4's job (``fc.matching.three_way``, which runs after
-    # this stage), not something to approximate here — so a three-way
-    # component is left exactly as exact_ref already formed it.
-    if len({e.source for e in other}) != 1:
-        return True
-    delta = _net_paise(bank) - _net_paise(other)
-    tol = tolerance_paise(abs(_net_paise(other)), len(other), cfg)
+    delta = _net_paise(bank) - _net_paise(comparand)
+    tol = tolerance_paise(abs(_net_paise(comparand)), len(comparand), cfg)
     return abs(delta) <= tol
 
 

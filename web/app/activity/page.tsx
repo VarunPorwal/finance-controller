@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
+import { fetchActivityBundle } from "@/lib/page-data";
 import { StatCard } from "@/components/ui/stat-card";
 import { RunProgressStrip } from "@/components/run-progress-strip";
 import { formatPaise, humanizeSnakeCase } from "@/lib/format";
@@ -17,16 +18,6 @@ type ReplayDiff = components["schemas"]["ReplayDiff"];
 type DecisionDiff = components["schemas"]["DecisionDiff"];
 type NarrativeOut = components["schemas"]["NarrativeOutModel"];
 
-interface ActivityBundle {
-  runsToday: number;
-  activeRuleCount: number;
-  avgRuntimeMs: number | null;
-  log: AuditEvent[];
-  llmCalls: LLMCall[];
-  runs: RunOut[];
-  narrative: NarrativeOut | null;
-}
-
 const ACTION_COLOR: Record<string, string> = {
   "run.create": "var(--success)",
   "run.finalize": "var(--success)",
@@ -35,33 +26,6 @@ const ACTION_COLOR: Record<string, string> = {
   "rule.activate": "var(--primary)",
   "rule.backtest": "var(--primary)",
 };
-
-export async function fetchActivityBundle(runId: string | undefined): Promise<ActivityBundle> {
-  const [runsRes, rulesRes, auditRes, llmRes, narrativeRes] = await Promise.all([
-    apiClient.GET("/api/v1/runs", { params: { query: { status: "complete", limit: 50 } } }),
-    apiClient.GET("/api/v1/rules", { params: { query: { status: "active" } } }),
-    apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 50 } } }),
-    apiClient.GET("/api/v1/llm/calls", { params: { query: { run_id: runId, limit: 20 } } }),
-    runId
-      ? apiClient.GET("/api/v1/agent/narrative/{run_id}", { params: { path: { run_id: runId } } })
-      : Promise.resolve({ data: undefined }),
-  ]);
-  const runsList = runsRes.data?.items ?? [];
-  const today = new Date().toDateString();
-  const withRuntime = runsList.filter((r) => r.runtime_ms != null);
-  const activeRules: Rule[] = rulesRes.data ?? [];
-  return {
-    runsToday: runsList.filter((r) => new Date(r.started_at).toDateString() === today).length,
-    activeRuleCount: new Set(activeRules.map((r) => r.rule_id)).size,
-    avgRuntimeMs: withRuntime.length
-      ? withRuntime.reduce((s, r) => s + (r.runtime_ms ?? 0), 0) / withRuntime.length
-      : null,
-    log: auditRes.data?.items ?? [],
-    llmCalls: llmRes.data?.items ?? [],
-    runs: runsList,
-    narrative: narrativeRes.data ?? null,
-  };
-}
 
 export default function ControllerActivityPage() {
   const { summary } = useRun();

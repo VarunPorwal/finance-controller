@@ -8,18 +8,8 @@ import { apiClient, type components } from "@/lib/client";
 import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { queryKeys } from "@/lib/query-keys";
+import { AuditBundle, AuditEvent, VerifyChainOut, fetchAuditBundle } from "./loader";
 
-type AuditEvent = components["schemas"]["AuditEventOut"];
-type VerifyChainOut = components["schemas"]["VerifyChainOut"];
-type AuditBundle = { events: AuditEvent[]; chain: VerifyChainOut | null };
-
-export async function fetchAuditBundle(runId: string | undefined): Promise<AuditBundle> {
-  const [eventsRes, chainRes] = await Promise.all([
-    apiClient.GET("/api/v1/audit", { params: { query: { run_id: runId, limit: 100 } } }),
-    apiClient.GET("/api/v1/audit/verify-chain", { params: { query: {} } }),
-  ]);
-  return { events: eventsRes.data?.items ?? [], chain: chainRes.data ?? null };
-}
 
 export default function AuditPage() {
   const { summary } = useRun();

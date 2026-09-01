@@ -14,6 +14,7 @@ from fc.ingest.narration.base import (
     ParsedNarration,
     is_truncated,
     parse_common_rail,
+    parse_dash_narration,
 )
 
 __all__ = ["HDFC_UTR_LEN", "HdfcNarrationParser"]
@@ -28,20 +29,6 @@ HDFC_UTR_LEN = NEFT_RTGS_UTR_LEN
 _NEFT = re.compile(
     r"^NEFT\s+(?:CR|DR):(?P<utr>[^/]*)(?:/(?P<party>[^/]*))?(?:/(?P<ref>.*))?$", re.IGNORECASE
 )
-
-#: A real HDFC NetBanking export dash-delimits instead of colon-delimits, and
-#: puts the UTR *last* rather than first: ``NEFT CR-{bank_code}-{party}-
-#: {UTR}`` — sometimes with a trailing batch-split or consolidation suffix
-#: (``-PART 1/2``, ``-CONSOLIDATED 2 BATCHES``) the colon format's positional
-#: regex has no way to anticipate. Tried after ``_NEFT`` fails: rather than a
-#: second positional pattern (fragile against however many dash-joined
-#: segments a real export uses), this looks for the UTR by *shape* — the
-#: RBI-wide 16-character scheme is the only run of that length in the
-#: narration, so a bare search finds it regardless of what surrounds it.
-#: A row with no UTR at all (an untagged settlement credit) correctly yields
-#: no match here, same as the colon format's empty-UTR case.
-_NEFT_DASH = re.compile(r"^NEFT\s+(?:CR|DR)-", re.IGNORECASE)
-_UTR_TOKEN = re.compile(rf"\b[A-Z0-9]{{{NEFT_RTGS_UTR_LEN}}}\b")
 
 
 class HdfcNarrationParser:
@@ -63,22 +50,22 @@ class HdfcNarrationParser:
                 truncated=is_truncated(text, utr, HDFC_UTR_LEN),
             )
 
-        if _NEFT_DASH.match(text):
-            token = _UTR_TOKEN.search(text)
-            utr = token.group(0) if token else None
-            return ParsedNarration(
-                rail="neft",
-                reference=utr,
-                counterparty=None,
-                vpa=None,
-                ifsc=None,
-                note=None,
-                truncated=is_truncated(text, utr, HDFC_UTR_LEN),
-            )
-
         common = parse_common_rail(text)
         if common is not None:
             return common
+
+        # Every remaining dash-delimited shape a NetBanking export writes —
+        # the dash NEFT format, POS terminal settlements, ACH utility debits,
+        # account charges, tax challans, inward remittances. Decomposed by
+        # segment content rather than by position (see
+        # :func:`parse_dash_narration`). A real HDFC export dash-delimits
+        # instead of colon-delimiting and puts the UTR *last*, sometimes with
+        # a trailing batch-split suffix (``-PART 1/2``,
+        # ``-CONSOLIDATED 2 BATCHES``) no positional regex can anticipate —
+        # which is why the UTR is found by shape there, not by position.
+        dashed = parse_dash_narration(text)
+        if dashed is not None:
+            return dashed
 
         return ParsedNarration(
             rail=None,

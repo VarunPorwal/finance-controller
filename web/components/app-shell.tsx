@@ -23,14 +23,13 @@ import { useRun } from "@/lib/run-context";
 import { formatDurationMs, formatRunTimestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
-import { fetchHomeBundle } from "@/app/page";
-import { fetchSourcesBundle } from "@/app/sources/page";
-import { fetchRecordsBundle } from "@/app/records/page";
-import { fetchRulesAndSuggestions } from "@/app/rules/page";
-import { fetchActivityBundle } from "@/app/activity/page";
-import { fetchAuditBundle } from "@/app/audit/page";
-import { fetchEvalBundle } from "@/app/eval/page";
-import { fetchCashBridge } from "@/app/cash/page";
+import { fetchSourcesBundle } from "@/app/sources/loader";
+import { fetchRecordsBundle } from "@/app/records/loader";
+import { fetchRulesAndSuggestions } from "@/app/rules/loader";
+import { fetchActivityBundle, fetchHomeBundle } from "@/lib/page-data";
+import { fetchAuditBundle } from "@/app/audit/loader";
+import { fetchEvalBundle } from "@/app/eval/loader";
+import { fetchCashBridge } from "@/app/cash/loader";
 
 // A prefetch per nav item, keyed the same as the screen's own useQuery so a
 // hover primes the exact cache entry the click will read — "once a screen

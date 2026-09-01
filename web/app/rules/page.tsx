@@ -11,10 +11,8 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { RuleAuthoringForm, type RuleSubmitPayload } from "@/components/rule-authoring-form";
 import { BacktestDialog } from "@/components/backtest-dialog";
 import { queryKeys } from "@/lib/query-keys";
+import { BacktestOut, Rule, SuggestionOut, fetchRulesAndSuggestions } from "./loader";
 
-type Rule = components["schemas"]["Rule"];
-type SuggestionOut = components["schemas"]["SuggestionOut"];
-type BacktestOut = components["schemas"]["BacktestOut"];
 
 const FILTERS = [
   { value: "all", label: "All" },
@@ -22,14 +20,6 @@ const FILTERS = [
   { value: "draft", label: "Draft" },
   { value: "retired", label: "Archived" },
 ];
-
-export async function fetchRulesAndSuggestions() {
-  const [rulesRes, suggestionsRes] = await Promise.all([
-    apiClient.GET("/api/v1/rules", { params: { query: {} } }),
-    apiClient.GET("/api/v1/rules/suggestions", {}),
-  ]);
-  return { rules: rulesRes.data ?? [], suggestions: suggestionsRes.data ?? [] };
-}
 
 export default function RuleBookPage() {
   const router = useRouter();

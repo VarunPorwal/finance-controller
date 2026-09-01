@@ -6,11 +6,8 @@ import { apiClient, type components } from "@/lib/client";
 import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
 import { queryKeys } from "@/lib/query-keys";
+import { AuditEvent, EventCount, RecordsBundle, TransactionEvent, fetchRecordsBundle } from "./loader";
 
-type EventCount = components["schemas"]["EventCountOut"];
-type AuditEvent = components["schemas"]["AuditEventOut"];
-type TransactionEvent = components["schemas"]["TransactionEvent"];
-type RecordsBundle = { counts: EventCount | null; history: AuditEvent[]; events: TransactionEvent[] };
 
 // Ledger rows are stored with source="ledger" (fc/ingest/tally.py: source
 // data comes from Tally, but the by_source/audit-action key it writes is
@@ -18,19 +15,6 @@ type RecordsBundle = { counts: EventCount | null; history: AuditEvent[]; events:
 // connector's display name.
 const SOURCES = ["razorpay", "bank", "ledger"] as const;
 const SOURCE_LABEL: Record<string, string> = { ledger: "Tally" };
-
-export async function fetchRecordsBundle(runId: string): Promise<RecordsBundle> {
-  const [countRes, auditRes, eventsRes] = await Promise.all([
-    apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
-    apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
-    apiClient.GET("/api/v1/events", { params: { query: { run_id: runId, limit: 30 } } }),
-  ]);
-  return {
-    counts: countRes.data ?? null,
-    history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
-    events: eventsRes.data?.items ?? [],
-  };
-}
 
 export default function RecordsPage() {
   const { summary } = useRun();

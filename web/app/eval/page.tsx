@@ -8,13 +8,8 @@ import { formatPaise } from "@/lib/format";
 import { StatusPill } from "@/components/ui/status-pill";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { queryKeys } from "@/lib/query-keys";
+import { CategoryStat, ConfusionOut, CoverageCurveOut, CoveragePoint, EvalBundle, EvalResult, fetchEvalBundle } from "./loader";
 
-type EvalResult = components["schemas"]["EvalResultOut"];
-type ConfusionOut = components["schemas"]["ConfusionOut"];
-type CoverageCurveOut = components["schemas"]["CoverageCurveOut"];
-type CoveragePoint = { threshold: string; coverage: number; precision: number; false_positives: number; abstentions: number };
-type CategoryStat = { raised: number; gt_total: number; correct: number; precision: number; recall: number };
-type EvalBundle = { evalResult: EvalResult | null; confusion: ConfusionOut | null; coverageCurve: CoverageCurveOut | null };
 
 const STAGE_LABEL: Record<string, string> = {
   exact_ref: "Exact reference match",
@@ -23,19 +18,6 @@ const STAGE_LABEL: Record<string, string> = {
   date_shift: "Date-shift match",
   many_to_one: "Many-to-one / subset-sum match",
 };
-
-export async function fetchEvalBundle(runId: string): Promise<EvalBundle> {
-  const [evalRes, confusionRes, coverageRes] = await Promise.all([
-    apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId } } }),
-    apiClient.GET("/api/v1/eval/{run_id}/confusion", { params: { path: { run_id: runId } } }),
-    apiClient.GET("/api/v1/eval/{run_id}/coverage-curve", { params: { path: { run_id: runId } } }),
-  ]);
-  return {
-    evalResult: evalRes.data ?? null,
-    confusion: confusionRes.data ?? null,
-    coverageCurve: coverageRes.data ?? null,
-  };
-}
 
 export default function EvaluationPage() {
   const { summary } = useRun();

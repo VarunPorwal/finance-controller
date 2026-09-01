@@ -11,7 +11,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from fc.exceptions.action import ActionGroup, action_group
 
 __all__ = [
     "AUTO_SAFE",
@@ -40,6 +42,13 @@ ExceptionCategory = Literal[
     "ambiguous_multi_candidate",
     "reference_truncated",
     "amount_variance",
+    # Lane-scoped findings (fc/lanes.py). A row outside the gateway lane has a
+    # ledger counterpart, not a gateway one, so "missing_in_gateway" is the
+    # wrong question to ask of it and produced a queue where a salary NACH and
+    # a short settlement read as the same kind of problem.
+    "unbooked_bank_entry",
+    "unidentified_inflow",
+    "revenue_booked_not_settled",
     "unknown",
 ]
 
@@ -71,6 +80,7 @@ NEVER_AUTO: frozenset[str] = frozenset(
         "duplicate_ledger_entry",
         "ambiguous_multi_candidate",
         "nach_batch_unexploded",
+        "unidentified_inflow",
         "unknown",
     }
 )
@@ -118,6 +128,26 @@ class Exception_(BaseModel):
     resolution_category: str | None = None
     resolved_at: datetime | None = None
     signature: str  # shape hash for 3x learning
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def action_group(self) -> ActionGroup:
+        """Which working day this belongs to — see :mod:`fc.exceptions.action`.
+
+        Computed, never stored: it is a function of fields the row already
+        carries, and persisting it would let a reclassification leave a stale
+        grouping behind. No ``as_of`` is passed because decision code never
+        reads the wall clock (CLAUDE.md hard rule 9); a caller that has a
+        run date and wants "overdue" told apart from "due later" calls
+        :func:`fc.exceptions.action.action_group` with it directly.
+        """
+        return action_group(
+            self.category,
+            tier=self.tier,
+            deadline=self.deadline,
+            recheck_at=self.recheck_at,
+        )
+
     created_at: datetime
 
     #: PRD §10.3 layer 6. Derived on read from the linked events' narrations by

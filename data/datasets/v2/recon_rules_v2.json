@@ -1,0 +1,138 @@
+{
+  "ruleset_id": "lumea-fy2526-q4",
+  "version": 1,
+  "currency": "INR",
+  "amount_units": {
+    "razorpay_recon_v2.json": "paise",
+    "bank_statement_v2.csv": "rupees",
+    "tally_daybook_v2.csv": "rupees"
+  },
+  "matching": {
+    "primary_key": "settlement_utr matched against bank chq_ref_no, then against the UTR embedded in the bank narration",
+    "fallback_key": "amount plus date window",
+    "group_bank_rows_by_utr_before_comparing": true,
+    "amount_tolerance_inr": 1.0,
+    "date_tolerance_working_days": 2
+  },
+  "deductions": [
+    {
+      "code": "MDR_UPI",
+      "applies_to": "payment.method == 'upi'",
+      "rate": 0.0,
+      "basis": "amount",
+      "books_to": "Bank Charges"
+    },
+    {
+      "code": "MDR_CARD",
+      "applies_to": "payment.method == 'card'",
+      "rate": 0.02,
+      "basis": "amount",
+      "books_to": "Bank Charges"
+    },
+    {
+      "code": "MDR_NETBANKING",
+      "applies_to": "payment.method == 'netbanking'",
+      "rate": 0.016,
+      "basis": "amount",
+      "books_to": "Bank Charges"
+    },
+    {
+      "code": "MDR_WALLET",
+      "applies_to": "payment.method == 'wallet'",
+      "rate": 0.019,
+      "basis": "amount",
+      "books_to": "Bank Charges"
+    },
+    {
+      "code": "MDR_EMI",
+      "applies_to": "payment.method == 'emi'",
+      "rate": 0.025,
+      "basis": "amount",
+      "books_to": "Bank Charges"
+    },
+    {
+      "code": "GST_ON_MDR",
+      "applies_to": "every gateway fee",
+      "rate": 0.18,
+      "basis": "fee",
+      "books_to": "GST Input",
+      "note": "input tax credit, not a cost"
+    },
+    {
+      "code": "TDS_194O",
+      "applies_to": "settlement batch",
+      "rate": 0.001,
+      "basis": "gross settlement value",
+      "books_to": "TDS Receivable",
+      "appears_as": "adjustment row with description 'TDS 194-O'"
+    },
+    {
+      "code": "MP_COMMISSION_BLINKIT",
+      "applies_to": "Blinkit settlement",
+      "rate": 0.18,
+      "basis": "gross",
+      "books_to": "Marketplace Commission"
+    },
+    {
+      "code": "MP_COMMISSION_ZEPTO",
+      "applies_to": "Zepto settlement",
+      "rate": 0.22,
+      "basis": "gross",
+      "books_to": "Marketplace Commission"
+    },
+    {
+      "code": "GST_ON_COMMISSION",
+      "applies_to": "marketplace commission",
+      "rate": 0.18,
+      "basis": "commission",
+      "books_to": "GST Input"
+    },
+    {
+      "code": "TCS_206C",
+      "applies_to": "marketplace settlement",
+      "rate": 0.005,
+      "basis": "gross",
+      "books_to": "TCS Receivable"
+    }
+  ],
+  "adjustment_rules": [
+    {
+      "code": "REFUND_NETTED",
+      "when": "gateway row type == 'refund' inside the batch",
+      "action": "add the refund debit back before comparing the batch to sales, expect a Credit Note in the daybook"
+    },
+    {
+      "code": "DISPUTE_DEBIT",
+      "when": "gateway row type == 'dispute' with credit_type 'dispute' and debit > 0",
+      "action": "treat as a batch deduction, expect a Chargeback Suspense debit in the daybook"
+    },
+    {
+      "code": "DISPUTE_REVERSAL",
+      "when": "a later dispute row credits the same dispute_id",
+      "action": "clear the suspense, link across settlement batches"
+    },
+    {
+      "code": "ON_HOLD",
+      "when": "payment.on_hold is true and settled is false",
+      "action": "exclude from the batch, do not expect a bank credit, flag revenue cut-off if a Sales voucher already exists"
+    },
+    {
+      "code": "SPLIT_CREDIT",
+      "when": "two or more bank rows carry the same UTR",
+      "action": "sum them before comparing"
+    },
+    {
+      "code": "MERGED_CREDIT",
+      "when": "one bank row narration says CONSOLIDATED",
+      "action": "allow one bank credit to clear more than one settlement batch"
+    }
+  ],
+  "escalation": {
+    "unresolved_after_rules": "raise as an exception with the source file, the amount, the closest candidate match and the reason no rule applied",
+    "never_auto_post": [
+      "unidentified inward credits",
+      "foreign remittances without a rate",
+      "cash deposits"
+    ]
+  }
+}

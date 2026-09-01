@@ -8,10 +8,8 @@ import { apiClient, type components } from "@/lib/client";
 import { IngestPanel } from "@/components/ingest-panel";
 import { StatusPill } from "@/components/ui/status-pill";
 import { queryKeys } from "@/lib/query-keys";
+import { AuditEvent, EventCount, SourcesBundle, fetchSourcesBundle } from "./loader";
 
-type EventCount = components["schemas"]["EventCountOut"];
-type AuditEvent = components["schemas"]["AuditEventOut"];
-type SourcesBundle = { counts: EventCount | null; history: AuditEvent[] };
 
 const CONNECTORS = [
   { key: "razorpay", name: "Razorpay", icon: CreditCard, iconBg: "var(--primary-tint)", iconColor: "var(--primary)" },
@@ -21,17 +19,6 @@ const CONNECTORS = [
   // by_source has to match what the ingest pipeline actually wrote.
   { key: "ledger", name: "Tally", icon: Database, iconBg: "var(--success-bg)", iconColor: "var(--success)" },
 ];
-
-export async function fetchSourcesBundle(runId: string): Promise<SourcesBundle> {
-  const [countRes, auditRes] = await Promise.all([
-    apiClient.GET("/api/v1/events/count", { params: { query: { run_id: runId } } }),
-    apiClient.GET("/api/v1/audit", { params: { query: { subject_id: runId, limit: 50 } } }),
-  ]);
-  return {
-    counts: countRes.data ?? null,
-    history: (auditRes.data?.items ?? []).filter((e) => e.action.startsWith("ingest.")),
-  };
-}
 
 export default function DataSourcesPage() {
   const router = useRouter();

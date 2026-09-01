@@ -33,6 +33,7 @@ from fc.exceptions.priority import priority_score
 from fc.exceptions.recommend import recommended_action
 from fc.exceptions.tier import tier_for
 from fc.ingest.aliases import AliasTable
+from fc.lanes import LaneMap, assign_lanes
 from fc.matching.cascade import CascadeResult, run_cascade
 from fc.models.exception_ import Cluster, Exception_, ExceptionStatus, ResolvedBy
 from fc.models.ids import deterministic_factory
@@ -65,23 +66,44 @@ PIPELINE_STAGES: Final[tuple[str, ...]] = (
 #: here too: change both sides in the same commit).
 _SETTLEMENT_RECEIPT_REF = re.compile(r"Settlement credit (\S+)")
 
-def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) -> bool:
-    """Whether a ledger row's voucher has a leg on the bank account itself.
+#: Vouchers that *are* a bank movement by definition. Tally's day book can be
+#: exported one row per voucher rather than one row per leg, and when it is, a
+#: Payment for rent shows only its ``Rent`` debit — the bank credit that paid
+#: it is implied by the voucher type and appears nowhere as a row. On such an
+#: export a bank-ledger-name test finds no bank leg on any Payment and drops
+#: every one of them from matching, which leaves the rent, salary, ad-spend and
+#: vendor debits on the statement with nothing to match against and turns each
+#: of them into a false "unbooked" finding.
+_CASH_SIDE_VOUCHERS: Final[frozenset[str]] = frozenset({"Receipt", "Payment", "Contra"})
 
-    Scoped by *ledger name*, not voucher_type: on this data a Sales, Journal
-    or Credit Note voucher never carries the bank ledger on either side, so
-    it never moves the bank account and can never have a bank-statement
-    counterpart — that is what makes it safe to exclude. Voucher_type would
-    get the same answer here (Tally's day book puts every bank-touching row
-    on a Receipt or Payment in this dataset) but would silently miss two
-    real-world cases a voucher_type-only filter has no way to see: a Contra
-    between two bank accounts, and a bank charge booked directly through a
-    Journal with the bank ledger on one leg. ``ledger_account`` is the
-    primary leg (Tally's ``ledger_name``) and ``counterparty`` is the party
-    leg (``party_ledger_name``) — a Contra can carry the bank ledger on
-    either one, so both are checked.
+
+def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) -> bool:
+    """Whether a ledger row's voucher moves the bank account.
+
+    Two independent tests, and both are needed because each catches what the
+    other misses.
+
+    *By ledger name.* On this data a Sales, Journal or Credit Note voucher
+    never carries the bank ledger on either side, so it never moves the bank
+    account and can never have a bank-statement counterpart — that is what
+    makes it safe to exclude. Name is checked rather than voucher type because
+    a name test also sees two real cases a type test cannot: a Contra between
+    two bank accounts, and a bank charge booked straight through a Journal with
+    the bank ledger on one leg. ``ledger_account`` is the primary leg (Tally's
+    ``ledger_name``) and ``counterparty`` the party leg
+    (``party_ledger_name``); a Contra can carry the bank ledger on either, so
+    both are checked.
+
+    *By voucher type.* A Receipt, Payment or Contra is a cash-side voucher: it
+    exists to record money entering or leaving an account. Where the export
+    collapses a voucher to a single row, the bank leg is not written down and
+    the name test cannot see it — but the voucher type still says the movement
+    happened. See ``_CASH_SIDE_VOUCHERS``.
     """
-    return event.ledger_account in bank_ledgers or event.counterparty in bank_ledgers
+    if event.ledger_account in bank_ledgers or event.counterparty in bank_ledgers:
+        return True
+    return (event.voucher_type or "") in _CASH_SIDE_VOUCHERS
+
 
 #: Same marker ``fc.cash.bridge`` matches in a settlement-line-item
 #: adjustment row's ``description`` (PRD §4.1.7). Duplicated rather than
@@ -99,6 +121,7 @@ class PipelineResult:
     exceptions: tuple[Exception_, ...]
     clusters: tuple[Cluster, ...]
     cash_bridge: CashBridge
+    lanes: LaneMap
 
 
 class _Lifecycle(NamedTuple):
@@ -185,13 +208,15 @@ def run_pipeline(
 
     rule_gaps = _all_rule_gaps(events, rules, cfg=cfg, aliases=aliases)
 
-    classified = classify_exceptions(reconcilable, cascade, rule_gaps=rule_gaps)
+    lanes = assign_lanes(events, bank_ledger_names=bank_ledgers, ledger_refs=cascade.ledger_refs)
+    classified = classify_exceptions(reconcilable, cascade, rule_gaps=rule_gaps, lanes=lanes)
     tier_decisions = [
         tier_for(
             item.category,
             confidence=item.confidence,
             cfg=cfg,
             expected_resolution_date=item.expected_resolution_date,
+            explained_by_rule=bool(item.rules_applied),
         )
         for item in classified
     ]
@@ -270,7 +295,7 @@ def run_pipeline(
             )
         )
 
-    cash_bridge = compute_cash_bridge(events, exceptions, cascade.matches)
+    cash_bridge = compute_cash_bridge(events, exceptions, cascade.matches, lanes=lanes)
 
     return PipelineResult(
         events=events,
@@ -279,6 +304,7 @@ def run_pipeline(
         exceptions=tuple(exceptions),
         clusters=tuple(clusters),
         cash_bridge=cash_bridge,
+        lanes=lanes,
     )
 
 

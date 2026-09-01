@@ -1,0 +1,256 @@
+[
+  {
+    "id": "mdr_upi",
+    "name": "Razorpay MDR - UPI",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ],
+      "method": "upi"
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "0.0"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mdr_card",
+    "name": "Razorpay MDR - Card",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ],
+      "method": "card"
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "2.0"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mdr_netbanking",
+    "name": "Razorpay MDR - Netbanking",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ],
+      "method": "netbanking"
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "1.6"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mdr_wallet",
+    "name": "Razorpay MDR - Wallet",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ],
+      "method": "wallet"
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "1.9"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mdr_emi",
+    "name": "Razorpay MDR - EMI",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ],
+      "method": "emi"
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "2.5"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "tds_194o",
+    "name": "TDS 194-O on gateway settlement",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "RAZORPAY",
+        "RAZORPAY SOFTWARE PVT LTD"
+      ]
+    },
+    "deductions": [
+      {
+        "type": "tds",
+        "basis": "gross",
+        "rate": "0.1"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mp_blinkit",
+    "name": "Blinkit marketplace settlement",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "BLINKIT"
+      ]
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "18.0"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      },
+      {
+        "type": "tcs",
+        "basis": "gross",
+        "rate": "0.5"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "mp_zepto",
+    "name": "Zepto marketplace settlement",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "ZEPTO"
+      ]
+    },
+    "deductions": [
+      {
+        "type": "commission",
+        "basis": "gross",
+        "rate": "22.0"
+      },
+      {
+        "type": "tax",
+        "basis": "commission",
+        "rate": "18.0"
+      },
+      {
+        "type": "tcs",
+        "basis": "gross",
+        "rate": "0.5"
+      }
+    ],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "pos_pinelabs",
+    "name": "Pine Labs POS settlement",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "PINELABS",
+        "PINE LABS"
+      ]
+    },
+    "deductions": [],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.02"
+    }
+  },
+  {
+    "id": "b2b_direct",
+    "name": "Direct B2B invoice receipt",
+    "scope": {
+      "date_from": "2026-01-01",
+      "counterparty_matches": [
+        "SALON HUB RETAIL PVT LTD",
+        "GLOW STUDIO CHAIN LLP",
+        "AYUR WELLNESS DISTRIBUTORS",
+        "SHRINGAR RETAIL LLP",
+        "URBAN SPA VENTURES"
+      ]
+    },
+    "deductions": [],
+    "tolerance": {
+      "absolute_paise": 100,
+      "percent": "0.0"
+    }
+  }
+]

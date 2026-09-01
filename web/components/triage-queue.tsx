@@ -21,9 +21,30 @@ const AWAITING_DECISION = new Set<ExceptionOut["status"]>([
   "escalated",
 ]);
 
+type ActionGroup = ExceptionOut["action_group"];
+
+// What to do, not what went wrong. A category tells you the shape of a
+// discrepancy; it does not tell you whether somebody has to act this morning,
+// whether the right move is to wait, whether the fix belongs in the daybook,
+// or whether nothing in the files can settle it. Those are four different
+// working days, and a queue sorted by category interleaves them. Order here is
+// the order of the day. Server-computed (`fc/exceptions/action.py`); this
+// component renders the grouping it is given and does not invent one.
+const ACTION_SECTIONS: { group: ActionGroup; label: string; note: string }[] = [
+  { group: "act_today", label: "Act today", note: "a window is closing" },
+  { group: "waiting", label: "Waiting", note: "the system will look again" },
+  { group: "books_fix", label: "Books fix", note: "the daybook is what changes" },
+  {
+    group: "cannot_resolve",
+    label: "Cannot resolve",
+    note: "no file here can settle it",
+  },
+];
+
 interface QueueRow {
   key: string;
   tier: "auto" | "monitor" | "escalate";
+  actionGroup: ActionGroup;
   amountPaise: number;
   title: string;
   subtitle: string;
@@ -191,26 +212,41 @@ export function TriageQueue({
         )}
       </div>
 
-      <ul className="flex flex-col gap-1">
-        {needsYouRows.length === 0 && (
-          <li className="text-text-muted border-border bg-card rounded-lg border border-dashed p-4 text-center text-sm">
-            Nothing needs you right now.
-          </li>
-        )}
-        {needsYouRows.map((row) => (
-          <QueueRowItem
-            key={row.key}
-            row={row}
-            selected={row.memberExceptionIds.includes(
-              selectedExceptionId ?? "",
-            )}
-            highlighted={Boolean(
-              highlightSet && row.eventIds.some((id) => highlightSet.has(id)),
-            )}
-            onSelect={() => onSelect(row.exceptionId)}
-          />
-        ))}
-      </ul>
+      {needsYouRows.length === 0 && (
+        <p className="text-text-muted border-border bg-card rounded-lg border border-dashed p-4 text-center text-sm">
+          Nothing needs you right now.
+        </p>
+      )}
+      {ACTION_SECTIONS.map((section) => {
+        const rows = needsYouRows.filter((r) => r.actionGroup === section.group);
+        if (rows.length === 0) return null;
+        return (
+          <div key={section.group} className="flex flex-col gap-1">
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-text-heading text-[11.5px] font-semibold uppercase tracking-wide">
+                {section.label} · {rows.length}
+              </span>
+              <span className="text-text-muted text-[11px]">{section.note}</span>
+            </div>
+            <ul className="flex flex-col gap-1">
+              {rows.map((row) => (
+                <QueueRowItem
+                  key={row.key}
+                  row={row}
+                  selected={row.memberExceptionIds.includes(
+                    selectedExceptionId ?? "",
+                  )}
+                  highlighted={Boolean(
+                    highlightSet &&
+                    row.eventIds.some((id) => highlightSet.has(id)),
+                  )}
+                  onSelect={() => onSelect(row.exceptionId)}
+                />
+              ))}
+            </ul>
+          </div>
+        );
+      })}
 
       {!gapFilterExceptionIds && (
         <details className="mt-2">
@@ -247,6 +283,7 @@ function rowForException(exc: ExceptionOut): QueueRow {
   return {
     key: exc.exception_id,
     tier: exc.tier,
+    actionGroup: exc.action_group,
     amountPaise: exc.residual_paise,
     title: humanizeSnakeCase(exc.category),
     subtitle: exc.deadline ? `act by ${exc.deadline}` : "no deadline",
@@ -269,9 +306,17 @@ function rowForCluster(
     cluster?.total_paise ??
     members.reduce((sum, m) => sum + m.residual_paise, 0);
   const first = members[0];
+  // A cluster is as urgent as its most urgent member: burying a closing
+  // deadline under "books fix" because the other four members are data entry
+  // is exactly the interleaving these sections exist to undo.
+  const group =
+    ACTION_SECTIONS.map((s) => s.group).find((g) =>
+      members.some((m) => m.action_group === g),
+    ) ?? "cannot_resolve";
   return {
     key: cluster?.cluster_id ?? first.exception_id,
     tier: worstTier,
+    actionGroup: group,
     amountPaise: totalPaise,
     title:
       cluster?.label ||

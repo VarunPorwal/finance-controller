@@ -33,6 +33,7 @@ def tier_for(
     confidence: Decimal,
     cfg: Config,
     expected_resolution_date: date | None = None,
+    explained_by_rule: bool = True,
 ) -> TierDecision:
     """§6.8's tiering, verbatim.
 
@@ -42,6 +43,16 @@ def tier_for(
     confidence never reaches.
     """
     if category in NEVER_AUTO:
+        return TierDecision(tier="escalate")
+
+    # An ``amount_variance`` is auto-safe because the Rulebook *shrank* it: the
+    # deduction stack explains the gap, the residual is inside tolerance, and
+    # the rule version stamped on it is the evidence. A variance nobody applied
+    # a rule to is a different animal — a ledger receipt booked ₹2,219.90 above
+    # the credit that paid it, say — and it inherited the match group's own
+    # confidence of 1.00 and auto-closed on the strength of how well the *bank*
+    # and *gateway* agreed, which is not what was being questioned.
+    if category == "amount_variance" and not explained_by_rule:
         return TierDecision(tier="escalate")
 
     if confidence >= cfg.auto_threshold and category in AUTO_SAFE:

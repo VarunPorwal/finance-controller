@@ -50,6 +50,7 @@ from fc.matching.ledger_refs import LedgerRefIndex
 from fc.matching.stages import StageRefusal
 from fc.matching.tolerance import tolerance_terms
 from fc.models.match import MatchEvidence, MatchResult, MatchStage, group_confidence_cap
+from fc.models.money import fmt_inr
 from fc.models.transaction import Source, TransactionEvent
 
 __all__ = ["ThreeWayOutcome", "leg_signature", "resolve"]
@@ -118,6 +119,7 @@ def resolve(
         "groups_missing_a_ledger_leg": 0,
         "groups_with_rival_legs": 0,
         "groups_already_three_way": 0,
+        "groups_where_books_disagree": 0,
     }
 
     for match in matches:
@@ -145,6 +147,10 @@ def resolve(
 
         if any(member.source == _LEDGER for member in members):
             counters["groups_already_three_way"] += 1
+            books = _books_disagreement(members, cfg=cfg)
+            if books is not None:
+                counters["groups_where_books_disagree"] += 1
+                refusals.append(books)
             resolved.append(match)
             continue
 
@@ -201,6 +207,80 @@ def resolve(
         attached_event_ids=frozenset(attached),
         bonus_applied=bonus_applied,
         diagnostics=counters,
+    )
+
+
+def _cash_net_paise(members: Sequence[TransactionEvent], source: Source) -> int:
+    """One source's net for this movement, positive toward the account.
+
+    Only the cash-side vouchers count on the ledger: the Journals booking MDR,
+    GST, TDS and reserve are the movement's *consequences*, already reconciled
+    by the deduction stack, and adding them here would make every healthy
+    settlement look short by its own fees. Row signs come from
+    :attr:`TransactionEvent.bank_signed_paise`.
+    """
+    total = 0
+    for member in members:
+        if member.source != source:
+            continue
+        if source == _LEDGER and (member.voucher_type or "") not in _CASH_VOUCHERS:
+            continue
+        total += member.bank_signed_paise
+    return total
+
+
+def _books_disagreement(members: Sequence[TransactionEvent], *, cfg: Config) -> StageRefusal | None:
+    """The books' own claim about a movement the cash has already proven.
+
+    D7's subject, stated as arithmetic: bank and gateway agree — that is what
+    made this a group — and the question left is whether the ledger says the
+    same number. Two shapes, told apart by evidence rather than by guess:
+    several cash vouchers of the same size mean the movement was recorded more
+    than once (``duplicate_ledger_entry``); a single voucher of the wrong size
+    means it was recorded once, wrongly (``amount_variance``).
+
+    Returns ``None`` when the books agree, which is the ordinary case. A group
+    that arrived here already three-way used to be waved through with no
+    balance check at all, which is how a receipt booked ₹2,219.90 above the
+    credit that paid it closed at confidence 1.00.
+    """
+    ledger_legs = [
+        m for m in members if m.source == _LEDGER and (m.voucher_type or "") in _CASH_VOUCHERS
+    ]
+    if not ledger_legs:
+        return None
+    movement = _cash_net_paise(members, "razorpay") or _cash_net_paise(members, "bank")
+    if not movement:
+        return None
+    booked = _cash_net_paise(members, _LEDGER)
+    delta = booked - movement
+    if abs(delta) <= tolerance_terms(abs(movement), len(ledger_legs), cfg).value:
+        return None
+
+    sized: dict[int, list[str]] = {}
+    for leg in ledger_legs:
+        sized.setdefault(leg.amount_paise, []).append(leg.event_id)
+    repeated = sorted(event_id for ids in sized.values() if len(ids) > 1 for event_id in ids)
+    if repeated:
+        return StageRefusal(
+            category="duplicate_ledger_entry",
+            event_ids=tuple(repeated),
+            amount_paise=abs(delta),
+            reason=(
+                f"the books record {fmt_inr(abs(booked))} against a movement of "
+                f"{fmt_inr(abs(movement))}; {len(repeated)} cash vouchers of the same "
+                "amount sit in this group, so the money was booked more than once"
+            ),
+        )
+    return StageRefusal(
+        category="amount_variance",
+        event_ids=tuple(sorted(leg.event_id for leg in ledger_legs)),
+        amount_paise=abs(delta),
+        reason=(
+            f"the books record {fmt_inr(abs(booked))} against a movement of "
+            f"{fmt_inr(abs(movement))} that the bank and the gateway already agree on; "
+            f"the voucher is out by {fmt_inr(abs(delta))}"
+        ),
     )
 
 

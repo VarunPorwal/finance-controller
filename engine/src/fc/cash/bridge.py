@@ -2,7 +2,7 @@
 
 ::
 
-    GROSS COLLECTED
+    GROSS COLLECTED                        (gateway lane, held payments excluded)
       - MDR - GST on MDR - TDS 194-O - Refunds settled - Chargebacks
       - Rolling reserve
       = EXPECTED NET
@@ -17,21 +17,42 @@ is one of ``test_architecture.py``'s four scanned decision modules), and every
 amount is int paise, never float (hard rule 1, and this package is one of the
 three money-arithmetic trees the AST scan covers).
 
-Each segment carries the ``event_ids`` that make it up and, where the segment
-overlaps something a human still needs to act on, the ``exception_ids`` that
-explain it — so the bridge in the UI can be clicked straight into the queue.
+**The bridge is one lane's story.** "Gross minus MDR minus GST equals what the
+bank credited" is arithmetic about payment-gateway money. A marketplace payout
+nets its commission at source, a POS terminal settles on its own cycle and a
+rent debit obeys no such stack at all — running all four through one bridge
+produces a bottom line that is the sum of four unrelated questions. So the
+bridge reads the gateway lane (:mod:`fc.lanes`) and nothing else, while the
+lanes it does not draw are still reconciled, still surfaced, and summarised
+beside it in :class:`LaneTotals`.
+
+Each segment carries the ``event_ids`` that make it up and the
+``exception_ids`` raised on exactly those rows, so the bridge in the UI can be
+clicked straight into the queue and the rows that come back add up to the
+heading they came from.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 
+from fc.exceptions.action import action_group
+from fc.lanes import LANES, LaneMap, assign_lanes
 from fc.models.exception_ import Exception_
 from fc.models.match import MatchResult
-from fc.models.transaction import TransactionEvent
+from fc.models.transaction import TransactionEvent, is_bank_account
 
-__all__ = ["BridgeSegment", "CashBridge", "compute_cash_bridge"]
+__all__ = [
+    "AT_RISK_CATEGORIES",
+    "BooksVsBank",
+    "BridgeSegment",
+    "CashAtRisk",
+    "CashBridge",
+    "LaneTotals",
+    "compute_cash_bridge",
+]
 
 #: Substrings ``fc.generator.razorpay_gen`` writes into a settlement-line-item
 #: adjustment row's ``description`` (PRD §4.1.7). Matched here rather than
@@ -48,6 +69,22 @@ _UNEXPLAINED_CATEGORIES = frozenset(
     {"missing_in_bank", "missing_in_gateway", "amount_variance", "unknown"}
 )
 
+#: The only two ways money on this screen can still be *lost*, as opposed to
+#: merely being somewhere nobody has looked yet.
+#:
+#: ``missing_in_bank`` is a payout the processor released and the bank never
+#: received: there is a support window, and past it the claim goes stale.
+#: ``chargeback_unrecorded`` is a dispute inside its RBI contest window: fail
+#: to contest and the money is gone by default.
+#:
+#: Everything else in the queue is a question about *where money is*, not a
+#: countdown to losing it. Cash at risk used to read "every escalated exception
+#: that happens to carry a deadline", which on a real statement summed a salary
+#: NACH, a rent RTGS, ad spend and a GST challan into a figure headed "at risk"
+#: — none of it gateway money, none of it losable, ₹27.5L of pure alarm. A
+#: number a controller acts on has to name the action and when it expires.
+AT_RISK_CATEGORIES: frozenset[str] = frozenset({"missing_in_bank", "chargeback_unrecorded"})
+
 
 @dataclass(frozen=True)
 class BridgeSegment:
@@ -60,15 +97,17 @@ class BridgeSegment:
     residual the whole bridge must sum to. ``attributed_paise`` is what the
     exceptions named in ``exception_ids`` actually total.
 
-    They are not the same number and cannot be made the same. The residual is
-    net over the whole corpus after MDR, GST, TDS, refunds, chargebacks and
-    reserve have been taken out; the exceptions are gross per-discrepancy
-    amounts that overlap those same deductions. On the reference corpus the
-    residual is ₹2,373.89 and the attributed exceptions total ₹26,940.42.
+    They are not the same number and cannot be made the same: the residual is
+    net over the corpus after MDR, GST, TDS, refunds, chargebacks and reserve
+    have come out, while the exceptions are gross per-discrepancy amounts that
+    overlap those same deductions. Carrying both means whichever number a
+    reader clicks, the rows they get sum to it.
 
-    Clicking the residual used to reveal the attributed set, so a drill-down on
-    ₹2,373.89 displayed ₹26,940.42 of exceptions. Carrying both means whichever
-    number a reader clicks, the rows they get sum to it.
+    Attribution is clipped to the segment: a segment may be under-attributed
+    (part of it is fine) but never over-attributed. The chargeback segment is
+    why — its amount is a *net* of debits less reversals while the exceptions
+    on it are gross unrecorded disputes, which is how ₹70,493.50 came to be
+    displayed as "attributed" against a ₹46,878.50 line.
     """
 
     label: str
@@ -81,21 +120,98 @@ class BridgeSegment:
 
 
 @dataclass(frozen=True)
+class BooksVsBank:
+    """The bank reconciliation statement, in the shape an accountant reads it.
+
+    Movement per the books, movement per the bank, the difference between
+    them, and — underneath — what the still-open items add up to, grouped by
+    the three reasons a difference is ever legitimate: it has not landed yet,
+    it happened in the account and nobody wrote it down, or somebody is still
+    working out what it was.
+
+    The three totals are *sums of open items*, deliberately not a decomposition
+    of ``difference_paise``, and they will not add up to it. They cannot: the
+    difference is one signed net over the period while an exception is a gross
+    per-discrepancy amount, and several of them describe the same money seen
+    from two sides. Subtracting the three from the difference and calling the
+    remainder "unexplained" produced −₹13,94,254.68 against a difference of
+    −₹3,35,254.77, which is not a residual, it is a units error. The honest
+    unexplained figure is the gateway bridge's own, which balances by
+    construction and is asserted to.
+
+    Movement, not balance: a balance needs an opening figure the files do not
+    always carry, while both sides state their own movements exactly.
+    """
+
+    books_movement_paise: int
+    bank_movement_paise: int
+    difference_paise: int
+    #: Open items whose own resolution is to wait — the system will look again.
+    timing_paise: int
+    #: Open items fixed by a voucher: the bank and the gateway agree, the
+    #: daybook does not have the entry, or has it wrong.
+    unrecorded_in_books_paise: int
+    #: Open items somebody is still working out, including everything no file
+    #: present can settle.
+    under_investigation_paise: int
+    #: The gateway bridge's own residual — ``expected_net - actual_bank``, the
+    #: figure every segment above is asserted to sum to. Not a subtraction of
+    #: the three totals above; see the class docstring.
+    unexplained_paise: int
+
+
+@dataclass(frozen=True)
+class CashAtRisk:
+    """Money that can still be lost, and when the window closes."""
+
+    amount_paise: int
+    item_count: int
+    earliest_deadline: date | None
+    exception_ids: tuple[str, ...]
+
+    def headline(self, *, as_of: date | None = None) -> str:
+        if not self.item_count:
+            return "Nothing at risk of being lost"
+        if self.earliest_deadline is None or as_of is None:
+            return f"At risk of being lost — {self.item_count} items"
+        days = (self.earliest_deadline - as_of).days
+        if days > 0:
+            when = f"in {days} days"
+        elif days == 0:
+            when = "today"
+        else:
+            when = f"{-days} days ago"
+        return f"At risk of being lost — {self.item_count} items, earliest deadline {when}"
+
+
+@dataclass(frozen=True)
+class LaneTotals:
+    """One lane's own two-sided position, for the strip above the queue.
+
+    The point is that the lanes are separate questions: a lane whose bank side
+    and ledger side agree is finished whatever the others look like, and a
+    controller can see at a glance which one is costing them the morning.
+    """
+
+    lane: str
+    bank_in_paise: int
+    bank_out_paise: int
+    ledger_paise: int
+    unreconciled_paise: int
+    exception_count: int
+
+
+@dataclass(frozen=True)
 class CashBridge:
     gross_collected_paise: int
     #: The razorpay payment-credit rows that sum to `gross_collected_paise`.
-    #: Carried the same way `BridgeSegment.event_ids` is, so a click on
-    #: "Gross settled" can show the rows behind it.
     gross_event_ids: tuple[str, ...]
     deductions: tuple[BridgeSegment, ...]
     expected_net_paise: int
     actual_bank_paise: int
     #: The bank rows that sum to `actual_bank_paise` — only ones the matcher
     #: attributed to the gateway (part of a match whose `sources_covered`
-    #: includes both "bank" and "razorpay"). A real merchant's statement has
-    #: salary, rent, vendor payments and GST challans on the same account;
-    #: netting the *whole* statement against gateway gross produced a
-    #: meaningless gap the moment a corpus had any of those.
+    #: includes both "bank" and "razorpay").
     actual_bank_event_ids: tuple[str, ...]
     unexplained_paise: int
     #: Every deduction plus the terminal "Unexplained" line, in bridge order.
@@ -103,6 +219,19 @@ class CashBridge:
     cash_at_risk_paise: int
     reserve_pending_release_paise: int
     gst_input_credit_claimable_paise: int
+    #: Captured but still held by the processor, so never collected and never
+    #: part of gross. Carried so the screen can say so instead of leaving the
+    #: money to reappear at the bottom as an unexplained gap.
+    held_paise: int = 0
+    held_event_ids: tuple[str, ...] = ()
+    at_risk: CashAtRisk = field(default_factory=lambda: CashAtRisk(0, 0, None, ()))
+    books_vs_bank: BooksVsBank = field(default_factory=lambda: BooksVsBank(0, 0, 0, 0, 0, 0, 0))
+    lanes: tuple[LaneTotals, ...] = ()
+    #: Credits nobody could attribute to a counterparty or a document. Shown
+    #: on their own because folding them into "cannot resolve" makes the total
+    #: read as exposure when the money is sitting safely in the account.
+    unidentified_inflow_paise: int = 0
+    unidentified_inflow_exception_ids: tuple[str, ...] = ()
 
 
 def _attribute(
@@ -116,54 +245,106 @@ def _attribute(
     added up to.
     """
     selected = sorted((e for e in exceptions if predicate(e)), key=lambda e: e.exception_id)
-    return tuple(e.exception_id for e in selected), sum(e.amount_paise for e in selected)
+    return tuple(e.exception_id for e in selected), sum(abs(e.amount_paise) for e in selected)
+
+
+#: Vouchers that move money in or out of an account by definition — the same
+#: set ``fc.pipeline`` uses to decide what the matcher may look at, and for the
+#: same reason: a day book exported one row per *voucher* rather than one row
+#: per *leg* writes a rent Payment as its ``Rent`` debit alone and never spells
+#: out the bank credit that paid it.
+_CASH_SIDE_VOUCHERS = frozenset({"Receipt", "Payment", "Contra"})
+
+
+def _touches_bank(event: TransactionEvent) -> bool:
+    """Whether a daybook row moves the bank account.
+
+    Only such rows are comparable with a statement: a Sales invoice and a fee
+    Journal change the books without moving the account, so counting them would
+    make the two sides incomparable by construction.
+
+    Both tests are needed. The account name catches a bank leg written down
+    explicitly; the voucher type catches one that is only implied. Testing the
+    name alone made the headline count every Receipt and no Payment — the books
+    side saw ₹30,03,475 of money in and none of the money out, against a bank
+    side that saw both, and the "difference" was then the whole outflow.
+    """
+    return is_bank_account(event.ledger_account) or (
+        (event.voucher_type or "") in _CASH_SIDE_VOUCHERS
+    )
 
 
 def compute_cash_bridge(
     events: Sequence[TransactionEvent],
     exceptions: Sequence[Exception_],
     matches: Sequence[MatchResult],
+    *,
+    lanes: LaneMap | None = None,
+    as_of: date | None = None,
 ) -> CashBridge:
-    """Build the bridge for one run.
+    """Build the bridge for one run, over the gateway lane.
 
-    The gross/deduction side of the bridge (razorpay rows) is still read
-    straight off the whole ingested corpus — "sales were booked at gross,
-    what did the gateway deduct" does not depend on what the matching
-    cascade proved (CLAUDE.md: "the Rulebook's gap is not the cascade's
-    gap" applies here too, for the same reason).
+    The gross/deduction side is read straight off the ingested gateway rows —
+    "sales were booked at gross, what did the gateway deduct" does not depend
+    on what the matching cascade proved (CLAUDE.md: "the Rulebook's gap is not
+    the cascade's gap" applies here too, for the same reason).
 
-    ``actual_bank_paise`` is different: a bank statement carries salary,
-    rent, vendor payments, ad spend and GST challans alongside gateway
-    settlements, and none of those are the bank's side of *this* bridge. Only
-    bank rows the matcher actually attributed to the gateway — part of a
-    match whose ``sources_covered`` includes both ``bank`` and ``razorpay``
-    — count here; everything else on the statement is out of scope for this
-    question, not evidence of a gap.
+    ``actual_bank_paise`` is different: only bank rows the matcher actually
+    attributed to the gateway — part of a match whose ``sources_covered``
+    includes both ``bank`` and ``razorpay`` — count here.
     """
+    lanes = lanes if lanes is not None else assign_lanes(events)
+
     gateway_matched_bank_ids: set[str] = set()
     for m in matches:
         if "bank" in m.sources_covered and "razorpay" in m.sources_covered:
             gateway_matched_bank_ids.update(m.event_ids)
+
+    # Lane assignment reads the files; the matcher reads the evidence, and where
+    # it has actually attributed a bank credit to a gateway settlement that
+    # credit is gateway money whatever its narration managed to say about
+    # itself. A statement whose settlement rows carry a truncated UTR and no
+    # recognisable party name — which is the common case, and the reference
+    # corpus's — lands every one of them outside the lane, and scoping the
+    # bridge to the lane alone then dropped ₹71,136.23 of proven bank credit
+    # out of "bank credited" and straight into the unexplained line.
+    gateway = tuple(
+        e
+        for e in events
+        if lanes.lane(e.event_id) == "gateway" or e.event_id in gateway_matched_bank_ids
+    )
+
     gross_paise = 0
     mdr_paise = 0
     gst_paise = 0
+    held_paise = 0
     payment_event_ids: list[str] = []
-    for event in events:
+    held_event_ids: list[str] = []
+    for event in gateway:
         is_payment_credit = (
             event.source == "razorpay"
             and event.txn_type == "payment"
             and event.direction == "credit"
         )
-        if is_payment_credit:
-            gross_paise += event.amount_paise + (event.fee_paise or 0)
-            mdr_paise += (event.fee_paise or 0) - (event.tax_paise or 0)
-            gst_paise += event.tax_paise or 0
-            payment_event_ids.append(event.event_id)
+        if not is_payment_credit:
+            continue
+        # A payment the processor is still holding has not been collected. It
+        # is real and it is not in the bridge: counting it overstates gross by
+        # money no bank credit can ever be found for, and it then reappears at
+        # the bottom as unexplained. Held money is a fact of its own.
+        if event.on_hold:
+            held_paise += event.amount_paise + (event.fee_paise or 0)
+            held_event_ids.append(event.event_id)
+            continue
+        gross_paise += event.amount_paise + (event.fee_paise or 0)
+        mdr_paise += (event.fee_paise or 0) - (event.tax_paise or 0)
+        gst_paise += event.tax_paise or 0
+        payment_event_ids.append(event.event_id)
 
     tds_paise, tds_ids = 0, []
     reserve_hold_paise, reserve_hold_ids = 0, []
     reserve_release_paise, reserve_release_ids = 0, []
-    for event in events:
+    for event in gateway:
         if event.source != "razorpay" or event.txn_type != "adjustment":
             continue
         description = str(event.raw.get("description") or "")
@@ -179,14 +360,13 @@ def compute_cash_bridge(
 
     refund_paise, refund_ids = 0, []
     # Signed, not a magnitude: a dispute debit is a chargeback (subtracts from
-    # net) and a dispute credit is its reversal (the money comes back, so it
-    # must add back). Both are txn_type == "dispute" — direction is what tells
-    # them apart. Filtering the whole loop to direction == "debit" (as this
-    # used to) silently dropped every reversal from the bridge: not double
-    # counted, just invisible, which is how a batch that nets out correctly
-    # in the bank still showed a phantom gap of exactly one reversal.
+    # net) and a dispute credit is its reversal — the money comes back, so it
+    # must add back. Both are txn_type == "dispute"; direction is what tells
+    # them apart, and filtering the loop to debits (as this once did) dropped
+    # every reversal from the bridge, which is how a batch that nets out
+    # correctly in the bank still showed a phantom gap of exactly one reversal.
     chargeback_paise, chargeback_ids = 0, []
-    for event in events:
+    for event in gateway:
         if event.source != "razorpay":
             continue
         if event.txn_type == "refund" and event.direction == "debit":
@@ -199,7 +379,7 @@ def compute_cash_bridge(
 
     actual_bank_paise = 0
     actual_bank_ids: list[str] = []
-    for event in events:
+    for event in gateway:
         if event.source != "bank" or event.event_id not in gateway_matched_bank_ids:
             continue
         sign = 1 if event.direction == "credit" else -1
@@ -218,47 +398,65 @@ def compute_cash_bridge(
     )
     unexplained_paise = expected_net_paise - actual_bank_paise
 
-    chargeback_exception_ids, chargeback_attributed = _attribute(
-        exceptions, lambda e: e.category == "chargeback_unrecorded"
-    )
-    unexplained_exception_ids, unexplained_attributed = _attribute(
-        exceptions, lambda e: e.category in _UNEXPLAINED_CATEGORIES
-    )
+    # Every segment attributes the exceptions raised on the rows that segment
+    # is made of. That makes the relationship checkable rather than editorial —
+    # the ids come from the segment's own ``event_ids`` — and it is why five of
+    # the six deduction rows used to display ATTRIBUTED ₹0.00: the pair was
+    # only ever computed for chargebacks and for the terminal residual, so a
+    # reader clicking any other row got an empty drill-down and reasonably
+    # concluded that attribution was not running at all.
+    def _on_rows(row_ids: tuple[str, ...], cap_paise: int) -> tuple[tuple[str, ...], int]:
+        rows = set(row_ids)
+        limit = abs(cap_paise)
+        total = 0
+        kept: list[str] = []
+        for exception in sorted(
+            (e for e in exceptions if rows.intersection(e.event_ids)),
+            key=lambda e: e.exception_id,
+        ):
+            if total + abs(exception.amount_paise) > limit:
+                continue
+            total += abs(exception.amount_paise)
+            kept.append(exception.exception_id)
+        return tuple(kept), total
+
+    def _segment(label: str, amount: int, row_ids: tuple[str, ...]) -> BridgeSegment:
+        ids, attributed = _on_rows(row_ids, amount)
+        return BridgeSegment(label, amount, row_ids, exception_ids=ids, attributed_paise=attributed)
 
     deductions = (
-        BridgeSegment("MDR", mdr_paise, tuple(payment_event_ids)),
-        BridgeSegment("GST on MDR", gst_paise, tuple(payment_event_ids)),
-        BridgeSegment("TDS 194-O", tds_paise, tuple(tds_ids)),
-        BridgeSegment("Refunds settled", refund_paise, tuple(refund_ids)),
-        BridgeSegment(
-            "Chargebacks",
-            chargeback_paise,
-            tuple(chargeback_ids),
-            exception_ids=chargeback_exception_ids,
-            attributed_paise=chargeback_attributed,
-        ),
-        BridgeSegment(
-            "Rolling reserve",
-            reserve_net_paise,
-            (*reserve_hold_ids, *reserve_release_ids),
-        ),
+        _segment("MDR", mdr_paise, tuple(payment_event_ids)),
+        _segment("GST on MDR", gst_paise, tuple(payment_event_ids)),
+        _segment("TDS 194-O", tds_paise, tuple(tds_ids)),
+        _segment("Refunds settled", refund_paise, tuple(refund_ids)),
+        _segment("Chargebacks", chargeback_paise, tuple(chargeback_ids)),
+        _segment("Rolling reserve", reserve_net_paise, (*reserve_hold_ids, *reserve_release_ids)),
+    )
+    unexplained_ids, unexplained_attributed = _attribute(
+        exceptions, lambda e: e.category in _UNEXPLAINED_CATEGORIES
     )
     unexplained_segment = BridgeSegment(
         "Unexplained",
         unexplained_paise,
         (),
-        exception_ids=unexplained_exception_ids,
+        exception_ids=unexplained_ids,
         attributed_paise=unexplained_attributed,
     )
     segments = (*deductions, unexplained_segment)
 
     by_id = {e.exception_id: e for e in exceptions}
     for segment in segments:
-        restated = sum(by_id[i].amount_paise for i in segment.exception_ids if i in by_id)
+        restated = sum(abs(by_id[i].amount_paise) for i in segment.exception_ids if i in by_id)
         if restated != segment.attributed_paise:
             raise ValueError(
                 f"bridge segment {segment.label!r} attributes {segment.attributed_paise} paise "
                 f"to {len(segment.exception_ids)} exception(s) that total {restated} paise"
+            )
+        if segment.label != "Unexplained" and segment.attributed_paise > abs(segment.amount_paise):
+            raise ValueError(
+                f"bridge segment {segment.label!r} attributes {segment.attributed_paise} paise "
+                f"to a segment of {segment.amount_paise} paise; a segment cannot be more wrong "
+                "than it is large"
             )
 
     total_paise = sum(segment.amount_paise for segment in segments)
@@ -268,8 +466,20 @@ def compute_cash_bridge(
             f"{gross_paise - actual_bank_paise} paise"
         )
 
-    cash_at_risk_paise = sum(
-        e.amount_paise for e in exceptions if e.tier == "escalate" and e.deadline is not None
+    at_risk_items = sorted(
+        (e for e in exceptions if e.category in AT_RISK_CATEGORIES and e.deadline is not None),
+        key=lambda e: e.exception_id,
+    )
+    at_risk = CashAtRisk(
+        amount_paise=sum(abs(e.amount_paise) for e in at_risk_items),
+        item_count=len(at_risk_items),
+        earliest_deadline=min(
+            (e.deadline for e in at_risk_items if e.deadline is not None), default=None
+        ),
+        exception_ids=tuple(e.exception_id for e in at_risk_items),
+    )
+    unidentified_ids, unidentified_paise = _attribute(
+        exceptions, lambda e: e.category == "unidentified_inflow"
     )
 
     return CashBridge(
@@ -281,7 +491,102 @@ def compute_cash_bridge(
         actual_bank_event_ids=tuple(actual_bank_ids),
         unexplained_paise=unexplained_paise,
         segments=segments,
-        cash_at_risk_paise=cash_at_risk_paise,
+        cash_at_risk_paise=at_risk.amount_paise,
         reserve_pending_release_paise=reserve_net_paise,
         gst_input_credit_claimable_paise=gst_paise,
+        held_paise=held_paise,
+        held_event_ids=tuple(held_event_ids),
+        at_risk=at_risk,
+        books_vs_bank=_books_vs_bank(
+            events, exceptions, as_of=as_of, unexplained_paise=unexplained_paise
+        ),
+        lanes=_lane_totals(events, exceptions, lanes),
+        unidentified_inflow_paise=unidentified_paise,
+        unidentified_inflow_exception_ids=unidentified_ids,
     )
+
+
+def _books_vs_bank(
+    events: Sequence[TransactionEvent],
+    exceptions: Sequence[Exception_],
+    *,
+    as_of: date | None,
+    unexplained_paise: int,
+) -> BooksVsBank:
+    """The headline an accountant already knows how to read."""
+    bank_movement = 0
+    books_movement = 0
+    for event in events:
+        if event.source == "bank":
+            bank_movement += (1 if event.direction == "credit" else -1) * event.amount_paise
+        elif event.source == "ledger" and _touches_bank(event):
+            books_movement += event.bank_signed_paise
+
+    timing = 0
+    unrecorded = 0
+    investigating = 0
+    for exception in exceptions:
+        amount = abs(exception.amount_paise)
+        group = action_group(
+            exception.category,
+            tier=exception.tier,
+            deadline=exception.deadline,
+            recheck_at=exception.recheck_at,
+            as_of=as_of,
+        )
+        if group == "waiting":
+            timing += amount
+        elif group == "books_fix":
+            unrecorded += amount
+        else:
+            investigating += amount
+
+    return BooksVsBank(
+        books_movement_paise=books_movement,
+        bank_movement_paise=bank_movement,
+        difference_paise=books_movement - bank_movement,
+        timing_paise=timing,
+        unrecorded_in_books_paise=unrecorded,
+        under_investigation_paise=investigating,
+        unexplained_paise=unexplained_paise,
+    )
+
+
+def _lane_totals(
+    events: Sequence[TransactionEvent],
+    exceptions: Sequence[Exception_],
+    lanes: LaneMap,
+) -> tuple[LaneTotals, ...]:
+    lane_of_exception: dict[str, str] = {}
+    known = {e.event_id for e in events}
+    for exception in exceptions:
+        for event_id in exception.event_ids:
+            if event_id in known:
+                lane_of_exception[exception.exception_id] = lanes.lane(event_id)
+                break
+
+    out: list[LaneTotals] = []
+    for lane in LANES:
+        bank_in = bank_out = ledger = 0
+        for event in events:
+            if lanes.lane(event.event_id) != lane:
+                continue
+            if event.source == "bank":
+                if event.direction == "credit":
+                    bank_in += event.amount_paise
+                else:
+                    bank_out += event.amount_paise
+            elif event.source == "ledger" and _touches_bank(event):
+                ledger += event.bank_signed_paise
+        in_lane = [e for e in exceptions if lane_of_exception.get(e.exception_id) == lane]
+        out.append(
+            LaneTotals(
+                lane=lane,
+                bank_in_paise=bank_in,
+                bank_out_paise=bank_out,
+                ledger_paise=ledger,
+                unreconciled_paise=sum(abs(e.amount_paise) for e in in_lane),
+                exception_count=len(in_lane),
+            )
+        )
+    return tuple(out)

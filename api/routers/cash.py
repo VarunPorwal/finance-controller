@@ -6,6 +6,8 @@ stored bridge that can drift from what the events actually say.
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -38,6 +40,54 @@ class BridgeSegmentOut(BaseModel):
     attributed_paise: int = 0
 
 
+class BooksVsBankOut(BaseModel):
+    """The bank reconciliation statement's own shape — PRD §13.4.
+
+    Books movement, bank movement, and the difference decomposed into the three
+    reasons a difference is legitimate, with whatever survives named rather
+    than absorbed. This is the headline an accountant reads first.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    books_movement_paise: int
+    bank_movement_paise: int
+    difference_paise: int
+    timing_paise: int
+    unrecorded_in_books_paise: int
+    under_investigation_paise: int
+    unexplained_paise: int
+
+
+class CashAtRiskOut(BaseModel):
+    """Money that can still be lost, and when the window shuts.
+
+    Deliberately not "every escalated exception": see
+    ``fc.cash.bridge.AT_RISK_CATEGORIES`` for what does and does not count and
+    why the difference matters on screen.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount_paise: int
+    item_count: int
+    earliest_deadline: date | None
+    exception_ids: list[str]
+
+
+class LaneTotalsOut(BaseModel):
+    """One lane's two-sided position — ``fc.lanes``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lane: str
+    bank_in_paise: int
+    bank_out_paise: int
+    ledger_paise: int
+    unreconciled_paise: int
+    exception_count: int
+
+
 class CashBridgeOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -53,6 +103,13 @@ class CashBridgeOut(BaseModel):
     cash_at_risk_paise: int
     reserve_pending_release_paise: int
     gst_input_credit_claimable_paise: int
+    held_paise: int
+    held_event_ids: list[str]
+    at_risk: CashAtRiskOut
+    books_vs_bank: BooksVsBankOut
+    lanes: list[LaneTotalsOut]
+    unidentified_inflow_paise: int
+    unidentified_inflow_exception_ids: list[str]
 
 
 def _segment_out(segment: object) -> BridgeSegmentOut:
@@ -79,6 +136,36 @@ def _bridge_out(run_id: str, bridge: CashBridge) -> CashBridgeOut:
         cash_at_risk_paise=bridge.cash_at_risk_paise,
         reserve_pending_release_paise=bridge.reserve_pending_release_paise,
         gst_input_credit_claimable_paise=bridge.gst_input_credit_claimable_paise,
+        held_paise=bridge.held_paise,
+        held_event_ids=list(bridge.held_event_ids),
+        at_risk=CashAtRiskOut(
+            amount_paise=bridge.at_risk.amount_paise,
+            item_count=bridge.at_risk.item_count,
+            earliest_deadline=bridge.at_risk.earliest_deadline,
+            exception_ids=list(bridge.at_risk.exception_ids),
+        ),
+        books_vs_bank=BooksVsBankOut(
+            books_movement_paise=bridge.books_vs_bank.books_movement_paise,
+            bank_movement_paise=bridge.books_vs_bank.bank_movement_paise,
+            difference_paise=bridge.books_vs_bank.difference_paise,
+            timing_paise=bridge.books_vs_bank.timing_paise,
+            unrecorded_in_books_paise=bridge.books_vs_bank.unrecorded_in_books_paise,
+            under_investigation_paise=bridge.books_vs_bank.under_investigation_paise,
+            unexplained_paise=bridge.books_vs_bank.unexplained_paise,
+        ),
+        lanes=[
+            LaneTotalsOut(
+                lane=lane.lane,
+                bank_in_paise=lane.bank_in_paise,
+                bank_out_paise=lane.bank_out_paise,
+                ledger_paise=lane.ledger_paise,
+                unreconciled_paise=lane.unreconciled_paise,
+                exception_count=lane.exception_count,
+            )
+            for lane in bridge.lanes
+        ],
+        unidentified_inflow_paise=bridge.unidentified_inflow_paise,
+        unidentified_inflow_exception_ids=list(bridge.unidentified_inflow_exception_ids),
     )
 
 
@@ -96,9 +183,7 @@ async def _compute(session: AsyncSession, run_id: str) -> CashBridge:
     exceptions = (
         await session.scalars(select(ExceptionRow).where(ExceptionRow.run_id == run_id))
     ).all()
-    matches = (
-        await session.scalars(select(MatchRow).where(MatchRow.run_id == run_id))
-    ).all()
+    matches = (await session.scalars(select(MatchRow).where(MatchRow.run_id == run_id))).all()
     return compute_cash_bridge(
         [event_from_row(e) for e in events],
         [exception_from_row(x) for x in exceptions],

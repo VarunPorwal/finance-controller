@@ -10,12 +10,13 @@ parse (only a genuine field-count mismatch raises :class:`MalformedRow`).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
 from fc.ingest.aliases import AliasTable, normalise_counterparty
-from fc.ingest.narration.base import NarrationParser
+from fc.ingest.narration.base import NEFT_RTGS_UTR_LEN, NarrationParser, ParsedNarration
 from fc.ingest.validators import (
     Break,
     IngestResult,
@@ -228,8 +229,16 @@ def rows_to_events(
                 # Truncated references are excluded from exact matching
                 # downstream (PRD §6.1); the flag itself lives on the
                 # narration, surfaced via raw_narration and raw.
-                utr=parsed.reference if parsed.rail in ("neft", "rtgs") else None,
-                rrn=parsed.reference if parsed.rail in ("imps", "upi") else None,
+                utr=(
+                    parsed.reference
+                    if parsed.rail in ("neft", "rtgs") and _is_utr_shaped(parsed.reference)
+                    else None
+                ),
+                rrn=(
+                    parsed.reference
+                    if parsed.rail in ("imps", "upi")
+                    else _document_reference(row) or _narration_reference(parsed)
+                ),
                 counterparty=parsed.counterparty,
                 counterparty_norm=counterparty_norm,
                 rail=parsed.rail,
@@ -239,6 +248,59 @@ def rows_to_events(
             )
         )
     return events
+
+
+#: What HDFC writes in ``chq_ref_no`` when the instrument has no reference at
+#: all. Treated as absent rather than as the string it literally is.
+_NO_DOCUMENT_REFERENCE = frozenset({"", "0", "-", "NA", "N/A"})
+
+#: Shorter than this and a shared value proves nothing: two unrelated rows can
+#: both carry ``1234``. The reference ladder's whole point is that a value
+#: identifies one movement.
+_MIN_DOCUMENT_REFERENCE_LEN = 6
+
+
+def _document_reference(row: RawBankRow) -> str | None:
+    """The statement's own reference column, when the narration gave none.
+
+    ``chq_ref_no`` is where a bank puts the instrument's reference — a POS
+    terminal settlement id, a marketplace payout id, the invoice a customer
+    quoted — for every row that is not a NEFT/RTGS carrying its UTR inline.
+    It is the same value the counterparty's own books record as the voucher
+    reference, which is what makes a bank row and a Tally voucher joinable
+    without a gateway in between. Not a UTR, so it rides in ``rrn``: an
+    acquirer/instrument reference, which is exactly what that field is.
+    """
+    value = (row.chq_ref_no or "").strip()
+    if value.upper() in _NO_DOCUMENT_REFERENCE or len(value) < _MIN_DOCUMENT_REFERENCE_LEN:
+        return None
+    return value
+
+
+#: A UTR is sixteen characters of ``[A-Z0-9]`` and nothing else. Judged by
+#: shape rather than by length alone: a tax challan reference can be exactly
+#: sixteen characters *including a hyphen* (``26010012345-194C``), and a length
+#: test read it as a UTR, refused it a place in ``rrn`` and then dropped it
+#: again because the row has no NEFT/RTGS rail to put a UTR on — so the one
+#: reference that could have matched the payment to its voucher disappeared.
+_UTR_SHAPED = re.compile(rf"^[A-Z0-9]{{{NEFT_RTGS_UTR_LEN}}}$")
+
+
+def _is_utr_shaped(value: str | None) -> bool:
+    return value is not None and _UTR_SHAPED.match(value) is not None
+
+
+def _narration_reference(parsed: ParsedNarration) -> str | None:
+    """The document the narration itself named, when it is not a UTR.
+
+    A UTR rides in ``utr``; anything else the narration yielded is an
+    instrument reference and belongs in ``rrn`` alongside the statement's own
+    reference column, so the two sides of a join look in the same place.
+    """
+    reference = parsed.reference
+    if reference is None or _is_utr_shaped(reference):
+        return None
+    return reference
 
 
 def _to_raw_row(fields: dict[str, str]) -> RawBankRow:

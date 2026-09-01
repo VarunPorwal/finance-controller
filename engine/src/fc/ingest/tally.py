@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime
 from typing import Any
 from xml.etree import ElementTree
 
 from fc.ingest.aliases import AliasTable, normalise_counterparty
+from fc.ingest.narration.base import NEFT_RTGS_UTR_LEN, document_reference
 from fc.ingest.validators import IngestResult, Rejection, check_idempotency, reject
 from fc.models.money import to_paise
 from fc.models.transaction import Direction, TransactionEvent
@@ -162,6 +164,7 @@ def _parse_rows(
             continue
 
         party = row.get("party_ledger_name") or None
+        utr, rrn = _voucher_reference(row.get("reference_number"), narration=row.get("narration"))
         source_row_id = check_idempotency("ledger", {"voucher_guid": guid})
 
         events.append(
@@ -174,6 +177,8 @@ def _parse_rows(
                 amount_paise=amount_paise,
                 direction=direction,
                 txn_date=voucher_date,
+                utr=utr,
+                rrn=rrn,
                 voucher_number=row.get("voucher_number") or None,
                 voucher_guid=guid,
                 counterparty=party,
@@ -187,6 +192,36 @@ def _parse_rows(
         )
 
     return IngestResult(events=tuple(events), rejections=tuple(rejections))
+
+
+#: See ``fc.ingest.bank_csv._document_reference`` — the same threshold, for
+#: the same reason, on the other side of the same join.
+_MIN_VOUCHER_REFERENCE_LEN = 6
+
+_UTR_SHAPED = re.compile(rf"^[A-Z0-9]{{{NEFT_RTGS_UTR_LEN}}}$")
+
+
+def _voucher_reference(raw: object, *, narration: object = None) -> tuple[str | None, str | None]:
+    """Tally's ``reference_number`` split into ``(utr, rrn)`` by shape.
+
+    A daybook Receipt records whatever reference the payer quoted. When that
+    is a 16-character NEFT/RTGS UTR it *is* the UTR and belongs at the top of
+    the reference ladder; when it is an invoice number, a POS terminal id or a
+    marketplace payout id it is a document reference and rides in ``rrn``,
+    matching where ``fc.ingest.bank_csv`` puts the bank statement's own
+    ``chq_ref_no``. The two together are what let a bank row and its voucher
+    match with no gateway row in between.
+    """
+    value = str(raw or "").strip()
+    if len(value) < _MIN_VOUCHER_REFERENCE_LEN:
+        # A Payment voucher routinely leaves the reference column empty and
+        # writes the bank narration verbatim into ``narration`` instead — the
+        # same string the statement carries. Reading it here is what lets a
+        # challan or invoice payment reconcile at all.
+        return None, document_reference(str(narration or ""))
+    if _UTR_SHAPED.match(value):
+        return value, None
+    return None, value
 
 
 def _required(row: Mapping[str, Any], key: str) -> str:

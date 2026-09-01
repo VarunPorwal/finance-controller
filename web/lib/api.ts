@@ -147,7 +147,8 @@ export interface paths {
         };
         /**
          * Get Default Run
-         * @description The run the app opens on: always the newest original, complete run.
+         * @description The run the app opens on: always the newest complete run, replays
+         *     included.
          *
          *     Declared before ``/{run_id}`` so FastAPI matches the literal path first.
          *
@@ -157,9 +158,17 @@ export interface paths {
          *     seeded once during setup stuck a tenant on one run forever with no way
          *     to point it anywhere else — every later reconciliation completed
          *     correctly but never showed up here. "Always newest" is the behavior
-         *     every other screen already assumes (the trend chart on Reconcile pulls
-         *     the full run list unfiltered), so this just makes the default consistent
-         *     with that instead of independently stale.
+         *     every other screen already assumes.
+         *
+         *     Originally scoped to ``parent_run_id.is_(None)`` (original runs only),
+         *     which meant "Run reconciliation" on the Reconcile screen — a replay of
+         *     the current run's own events under whatever ruleset is active now —
+         *     completed successfully but never appeared here: a replay's whole point
+         *     is to become the current view after a rule change, and excluding it
+         *     made the button look like it did nothing. The trend chart and run list
+         *     stay ``kind=original`` on purpose (a what-if history isn't the
+         *     reconciliation history), but "what am I looking at right now" has no
+         *     reason to prefer a stale original over a replay that superseded it.
          */
         get: operations["get_default_run_api_v1_runs_default_get"];
         put?: never;
@@ -906,12 +915,13 @@ export interface paths {
          *     written: a bad entry at position 12 of 20 fails the whole import rather
          *     than leaving 11 rules created and 9 silently skipped.
          *
-         *     Every entry lands as ``status="draft"`` with ``origin="imported"``
-         *     regardless of what the file says (a rule is never born active — §8.8,
-         *     same invariant ``POST /rules`` enforces) and never overwrites an
-         *     existing ``rule_id``: one already present in this tenant gets the next
-         *     version instead, through the same ladder ``/versions`` uses. A file can
-         *     be re-uploaded to add versions without disturbing what is already there.
+         *     Every entry lands active immediately, origin="imported": uploading a
+         *     rulebook replaces what is live rather than staging drafts next to it.
+         *     Every rule the tenant had active going in is retired first — stopped
+         *     outright, not just window-closed — so the import is a clean swap, not
+         *     an overlay. Skips the reason-per-activation prompt the single-rule
+         *     ``/activate`` endpoint requires, since an import is one human decision
+         *     covering the whole file, not one per rule.
          */
         post: operations["import_rules_api_v1_rules_import_post"];
         delete?: never;
@@ -1441,18 +1451,6 @@ export interface components {
             /** Reason */
             reason: string;
         };
-        /** TenantSettingsOut */
-        TenantSettingsOut: {
-            /** Email On Run Complete */
-            email_on_run_complete: boolean;
-            /** Email Last Sent At */
-            email_last_sent_at?: string | null;
-        };
-        /** TenantSettingsUpdate */
-        TenantSettingsUpdate: {
-            /** Email On Run Complete */
-            email_on_run_complete: boolean;
-        };
         /** AppliedOut */
         AppliedOut: {
             /** Exception Id */
@@ -1629,6 +1627,30 @@ export interface components {
             /** File */
             file: string;
         };
+        /**
+         * BooksVsBankOut
+         * @description The bank reconciliation statement's own shape — PRD §13.4.
+         *
+         *     Books movement, bank movement, and the difference decomposed into the three
+         *     reasons a difference is legitimate, with whatever survives named rather
+         *     than absorbed. This is the headline an accountant reads first.
+         */
+        BooksVsBankOut: {
+            /** Books Movement Paise */
+            books_movement_paise: number;
+            /** Bank Movement Paise */
+            bank_movement_paise: number;
+            /** Difference Paise */
+            difference_paise: number;
+            /** Timing Paise */
+            timing_paise: number;
+            /** Unrecorded In Books Paise */
+            unrecorded_in_books_paise: number;
+            /** Under Investigation Paise */
+            under_investigation_paise: number;
+            /** Unexplained Paise */
+            unexplained_paise: number;
+        };
         /** BreakOut */
         BreakOut: {
             /** Row */
@@ -1680,6 +1702,24 @@ export interface components {
             /** Detail */
             detail?: string | null;
         };
+        /**
+         * CashAtRiskOut
+         * @description Money that can still be lost, and when the window shuts.
+         *
+         *     Deliberately not "every escalated exception": see
+         *     ``fc.cash.bridge.AT_RISK_CATEGORIES`` for what does and does not count and
+         *     why the difference matters on screen.
+         */
+        CashAtRiskOut: {
+            /** Amount Paise */
+            amount_paise: number;
+            /** Item Count */
+            item_count: number;
+            /** Earliest Deadline */
+            earliest_deadline: string | null;
+            /** Exception Ids */
+            exception_ids: string[];
+        };
         /** CashBridgeOut */
         CashBridgeOut: {
             /** Run Id */
@@ -1706,6 +1746,18 @@ export interface components {
             reserve_pending_release_paise: number;
             /** Gst Input Credit Claimable Paise */
             gst_input_credit_claimable_paise: number;
+            /** Held Paise */
+            held_paise: number;
+            /** Held Event Ids */
+            held_event_ids: string[];
+            at_risk: components["schemas"]["CashAtRiskOut"];
+            books_vs_bank: components["schemas"]["BooksVsBankOut"];
+            /** Lanes */
+            lanes: components["schemas"]["LaneTotalsOut"][];
+            /** Unidentified Inflow Paise */
+            unidentified_inflow_paise: number;
+            /** Unidentified Inflow Exception Ids */
+            unidentified_inflow_exception_ids: string[];
         };
         /**
          * Cluster
@@ -2019,7 +2071,7 @@ export interface components {
              * Category
              * @enum {string}
              */
-            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unknown";
+            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unbooked_bank_entry" | "unidentified_inflow" | "revenue_booked_not_settled" | "unknown";
             /** Amount Paise */
             amount_paise: number;
             /** Residual Paise */
@@ -2082,6 +2134,19 @@ export interface components {
             suspicious_narration: boolean;
             /** Suspicious Patterns */
             suspicious_patterns?: string[];
+            /**
+             * Action Group
+             * @description Which working day this belongs to — see :mod:`fc.exceptions.action`.
+             *
+             *     Computed, never stored: it is a function of fields the row already
+             *     carries, and persisting it would let a reclassification leave a stale
+             *     grouping behind. No ``as_of`` is passed because decision code never
+             *     reads the wall clock (CLAUDE.md hard rule 9); a caller that has a
+             *     run date and wants "overdue" told apart from "due later" calls
+             *     :func:`fc.exceptions.action.action_group` with it directly.
+             * @enum {string}
+             */
+            readonly action_group: "act_today" | "waiting" | "books_fix" | "cannot_resolve";
         };
         /** ExecuteOut */
         ExecuteOut: {
@@ -2215,6 +2280,24 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * LaneTotalsOut
+         * @description One lane's two-sided position — ``fc.lanes``.
+         */
+        LaneTotalsOut: {
+            /** Lane */
+            lane: string;
+            /** Bank In Paise */
+            bank_in_paise: number;
+            /** Bank Out Paise */
+            bank_out_paise: number;
+            /** Ledger Paise */
+            ledger_paise: number;
+            /** Unreconciled Paise */
+            unreconciled_paise: number;
+            /** Exception Count */
+            exception_count: number;
         };
         /** LinkOut */
         LinkOut: {
@@ -2572,7 +2655,7 @@ export interface components {
              * Category
              * @enum {string}
              */
-            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unknown";
+            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unbooked_bank_entry" | "unidentified_inflow" | "revenue_booked_not_settled" | "unknown";
         };
         /** ReclassifyRequest */
         ReclassifyRequest: {
@@ -2580,7 +2663,7 @@ export interface components {
              * Category
              * @enum {string}
              */
-            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unknown";
+            category: "missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unbooked_bank_entry" | "unidentified_inflow" | "revenue_booked_not_settled" | "unknown";
             /** Reason */
             reason: string;
         };
@@ -3009,6 +3092,18 @@ export interface components {
             resolution_category: string;
             /** Observed Rate Percent */
             observed_rate_percent: string;
+        };
+        /** TenantSettingsOut */
+        TenantSettingsOut: {
+            /** Email On Run Complete */
+            email_on_run_complete: boolean;
+            /** Email Last Sent At */
+            email_last_sent_at?: string | null;
+        };
+        /** TenantSettingsUpdate */
+        TenantSettingsUpdate: {
+            /** Email On Run Complete */
+            email_on_run_complete: boolean;
         };
         /** TokenOut */
         TokenOut: {
@@ -4355,7 +4450,7 @@ export interface operations {
                 run_id?: string | null;
                 status?: ("open" | "monitoring" | "resolved" | "written_off" | "snoozed" | "escalated" | "superseded") | null;
                 tier?: ("auto" | "monitor" | "escalate") | null;
-                category?: ("missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unknown") | null;
+                category?: ("missing_in_bank" | "missing_in_gateway" | "missing_in_ledger" | "duplicate_ledger_entry" | "chargeback_unrecorded" | "partial_refund" | "nach_batch_unexploded" | "timing_lag" | "ambiguous_multi_candidate" | "reference_truncated" | "amount_variance" | "unbooked_bank_entry" | "unidentified_inflow" | "revenue_booked_not_settled" | "unknown") | null;
                 cluster_id?: string | null;
                 limit?: number;
                 cursor?: string | null;
@@ -5883,7 +5978,9 @@ export interface operations {
     get_settings_api_v1_settings_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5898,6 +5995,15 @@ export interface operations {
                     "application/json": components["schemas"]["TenantSettingsOut"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     update_settings_api_v1_settings_patch: {
@@ -5905,7 +6011,9 @@ export interface operations {
             query?: {
                 dry_run?: boolean;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

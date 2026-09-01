@@ -7,65 +7,23 @@ import { useRouter } from "next/navigation";
 import { RefreshCw, Download, Upload, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
+import { fetchHomeBundle } from "@/lib/page-data";
 import { formatPercent } from "@/lib/format";
 import { queryKeys } from "@/lib/query-keys";
 import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
+import { BooksVsBank } from "@/components/books-vs-bank";
 import { ExceptionsTable } from "@/components/exceptions-table";
 import { PlaceholderPanel } from "@/components/placeholder-panel";
 import { InteractiveTrendChart } from "@/components/ui/interactive-trend-chart";
 import { EmailToggle } from "@/components/email-toggle";
 
 type RunSummary = components["schemas"]["RunSummaryOut"];
-interface HistoryPoint {
-  label: string;
-  eventCount: number;
-  autoMatched: number;
-}
-interface HomeBundle {
-  prevSummary: RunSummary | null;
-  history: HistoryPoint[];
-}
-
-const HISTORY_WINDOW = 10;
-
 const SOURCE_COLOR: Record<string, string> = {
   razorpay: "var(--primary)",
   tally: "var(--success)",
   bank: "var(--amber)",
 };
-
-export async function fetchHomeBundle(runId: string): Promise<HomeBundle> {
-  const runsRes = await apiClient.GET("/api/v1/runs", {
-    params: { query: { status: "complete", kind: "original", limit: HISTORY_WINDOW } },
-  });
-  const runs = runsRes.data?.items ?? []; // newest first
-  let prev: RunSummary | null = null;
-  const olderRunId = runs.find((r) => r.run_id !== runId)?.run_id;
-  if (olderRunId) {
-    const { data } = await apiClient.GET("/api/v1/runs/{run_id}/summary", {
-      params: { path: { run_id: olderRunId } },
-    });
-    prev = data ?? null;
-  }
-
-  const chronological = [...runs].reverse(); // oldest first, for a left-to-right trend
-  const summaries = await Promise.all(
-    chronological.map((r) =>
-      apiClient.GET("/api/v1/runs/{run_id}/summary", { params: { path: { run_id: r.run_id } } }),
-    ),
-  );
-  const history: HistoryPoint[] = chronological.map((r, i) => {
-    const s = summaries[i].data;
-    return {
-      label: new Date(r.started_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
-      eventCount: s?.event_count ?? 0,
-      autoMatched: s ? s.event_count - s.exception_count : 0,
-    };
-  });
-
-  return { prevSummary: prev, history };
-}
 
 export default function ReconcileHome() {
   const { summary, loading, error, refresh } = useRun();
@@ -85,7 +43,10 @@ export default function ReconcileHome() {
       const { error } = runId
         ? await apiClient.POST("/api/v1/runs/{run_id}/replay", {
             params: { path: { run_id: runId } },
-            body: { reason: "Re-run from Reconcile" },
+            // `seed` is required by ReplayRequest and matches the demo seed the
+            // original run used, so a replay stays byte-identical to it
+            // (CLAUDE.md hard rule 9) rather than reshuffling ids.
+            body: { reason: "Re-run from Reconcile", seed: 7 },
           })
         : await apiClient.POST("/api/v1/runs", { body: { mode: "demo", seed: 7 } });
       if (error) {
@@ -174,6 +135,8 @@ export default function ReconcileHome() {
         </div>
       </div>
       {reconcileError && <p className="mb-3 text-xs text-amber-text">{reconcileError}</p>}
+
+      {runId && <BooksVsBank runId={runId} />}
 
       <div className="mb-5 grid grid-cols-4 gap-5">
         {kpis.map((k) => (
