@@ -42,6 +42,7 @@ from fc.exceptions.action import action_group
 from fc.lanes import LANES, LaneMap, assign_lanes
 from fc.models.exception_ import Exception_
 from fc.models.match import MatchResult
+from fc.models.money import already_paise
 from fc.models.transaction import TransactionEvent, is_bank_account
 
 __all__ = [
@@ -256,6 +257,32 @@ def _attribute(
 _CASH_SIDE_VOUCHERS = frozenset({"Receipt", "Payment", "Contra"})
 
 
+def _stated_gross_paise(event: TransactionEvent) -> int:
+    """What the customer actually paid on one gateway payment row.
+
+    The recon report states it directly, and reading it is the only way to be
+    right about it, because ``fee`` does not mean the same thing in every
+    export. One report writes ``amount = credit + fee`` with GST folded into
+    the fee; another writes ``amount = credit + fee + tax`` with the two
+    stated apart. Reconstructing gross as ``credit + fee`` therefore
+    understates it by the whole GST on the second kind — ₹1,638.65 on the v2
+    corpus — and computing MDR as ``fee - tax`` subtracts that GST a second
+    time. The two errors cancel in ``expected_net``, which is why the bridge
+    still balanced while the gross and MDR lines on screen were both wrong.
+
+    ``amount_paise`` on the event is the *credit* — the money that moved —
+    which is the right thing for matching and the wrong thing for this. Falls
+    back to ``credit + fee`` when a row states no amount at all.
+
+    Razorpay amounts are already integer paise; ``already_paise`` asserts that
+    rather than converting (CLAUDE.md).
+    """
+    stated = event.raw.get("amount") if isinstance(event.raw, dict) else None
+    if isinstance(stated, int) and stated > 0:
+        return already_paise(stated)
+    return event.amount_paise + (event.fee_paise or 0)
+
+
 def _touches_bank(event: TransactionEvent) -> bool:
     """Whether a daybook row moves the bank account.
 
@@ -333,12 +360,17 @@ def compute_cash_bridge(
         # money no bank credit can ever be found for, and it then reappears at
         # the bottom as unexplained. Held money is a fact of its own.
         if event.on_hold:
-            held_paise += event.amount_paise + (event.fee_paise or 0)
+            held_paise += _stated_gross_paise(event)
             held_event_ids.append(event.event_id)
             continue
-        gross_paise += event.amount_paise + (event.fee_paise or 0)
-        mdr_paise += (event.fee_paise or 0) - (event.tax_paise or 0)
+        gross = _stated_gross_paise(event)
+        gross_paise += gross
+        # What the processor kept, split by what it kept it for. Derived from
+        # the row's own identity rather than from a fee convention: the
+        # deduction is gross less what was credited, GST is the row's stated
+        # tax, and MDR is whatever is left.
         gst_paise += event.tax_paise or 0
+        mdr_paise += gross - event.amount_paise - (event.tax_paise or 0)
         payment_event_ids.append(event.event_id)
 
     tds_paise, tds_ids = 0, []

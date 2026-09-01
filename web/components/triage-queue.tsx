@@ -39,6 +39,15 @@ const ACTION_SECTIONS: { group: ActionGroup; label: string; note: string }[] = [
     label: "Cannot resolve",
     note: "no file here can settle it",
   },
+  // Beside the four, not inside them. Money that arrived and nobody can
+  // attribute is not exposure, and putting it under "cannot resolve" makes
+  // that section's total read as money at stake when it is sitting in the
+  // account.
+  {
+    group: "unidentified_inflow",
+    label: "Unidentified inflows",
+    note: "money arrived · nothing at stake",
+  },
 ];
 
 interface QueueRow {

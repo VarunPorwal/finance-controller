@@ -2146,7 +2146,7 @@ export interface components {
              *     :func:`fc.exceptions.action.action_group` with it directly.
              * @enum {string}
              */
-            readonly action_group: "act_today" | "waiting" | "books_fix" | "cannot_resolve";
+            readonly action_group: "act_today" | "waiting" | "books_fix" | "cannot_resolve" | "unidentified_inflow";
         };
         /** ExecuteOut */
         ExecuteOut: {

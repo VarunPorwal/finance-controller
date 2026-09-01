@@ -4,13 +4,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Download, Upload, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
+import { RefreshCw, Download, Upload } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { fetchHomeBundle } from "@/lib/page-data";
 import { formatPercent } from "@/lib/format";
 import { queryKeys } from "@/lib/query-keys";
-import { StatCard } from "@/components/ui/stat-card";
 import { ReconciliationBridge } from "@/components/reconciliation-bridge";
 import { BooksVsBank } from "@/components/books-vs-bank";
 import { ExceptionsTable } from "@/components/exceptions-table";
@@ -76,7 +75,6 @@ export default function ReconcileHome() {
     queryFn: async () => (await apiClient.GET("/api/v1/eval/{run_id}", { params: { path: { run_id: runId! } } })).data ?? null,
     enabled: !!runId,
   });
-  const prevSummary = home?.prevSummary ?? null;
   const history = home?.history ?? [];
 
   if (loading) return <div className="fc-card h-40 animate-pulse" aria-hidden />;
@@ -84,22 +82,8 @@ export default function ReconcileHome() {
     return <PlaceholderPanel title="No run yet" note={error ?? "Start a run to see the reconciliation."} />;
   }
 
-  const delta = (key: keyof RunSummary, curr: number) => {
-    if (!prevSummary) return null;
-    const prev = prevSummary[key] as number;
-    if (prev === 0) return null;
-    const pct = ((curr - prev) / prev) * 100;
-    return { text: `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%`, tone: pct >= 0 ? ("success" as const) : ("error" as const), sub: `vs ${prev} last run` };
-  };
 
   const autoMatched = summary.event_count - summary.exception_count;
-  const kpis = [
-    { label: "Records", value: summary.event_count, icon: <ClipboardList width={14} height={14} />, iconBg: "var(--primary-tint)", iconColor: "var(--primary)", d: delta("event_count", summary.event_count) },
-    { label: "Auto Matched", value: autoMatched, icon: <CircleCheck width={14} height={14} />, iconBg: "var(--success-bg)", iconColor: "var(--success)", d: delta("match_count", summary.match_count) },
-    { label: "Exceptions", value: summary.exception_count, icon: <TriangleAlert width={14} height={14} />, iconBg: "var(--amber-bg)", iconColor: "var(--amber-text)", d: delta("exception_count", summary.exception_count) },
-    { label: "Queue", value: summary.escalated_count + summary.monitor_count, icon: <Clock width={14} height={14} />, iconBg: "var(--neutral-bg)", iconColor: "var(--text-body)", d: delta("escalated_count", summary.escalated_count) },
-  ];
-
   const sources = counts
     ? Object.entries(counts.by_source).map(([label, count]) => ({ label, count, color: SOURCE_COLOR[label] ?? "var(--text-muted)" }))
     : [];
@@ -137,22 +121,6 @@ export default function ReconcileHome() {
       {reconcileError && <p className="mb-3 text-xs text-amber-text">{reconcileError}</p>}
 
       {runId && <BooksVsBank runId={runId} />}
-
-      <div className="mb-5 grid grid-cols-4 gap-5">
-        {kpis.map((k) => (
-          <StatCard
-            key={k.label}
-            label={k.label}
-            value={k.value.toLocaleString("en-IN")}
-            icon={k.icon}
-            iconBg={k.iconBg}
-            iconColor={k.iconColor}
-            delta={k.d?.text}
-            deltaTone={k.d?.tone}
-            sub={k.d?.sub ?? "no prior run to compare"}
-          />
-        ))}
-      </div>
 
       <div className="mb-5 grid grid-cols-[1.65fr_1fr] gap-5">
         <div className="flex flex-col gap-5">

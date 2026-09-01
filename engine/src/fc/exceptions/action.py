@@ -13,6 +13,12 @@ different working days, and a queue sorted by category interleaves them.
     BOOKS FIX       bank and gateway agree; the daybook is what needs editing
     CANNOT RESOLVE  no file present can settle it; a human must decide or ask
 
+A fifth bucket sits beside those four rather than inside them. An unidentified
+inflow is money that *arrived* — nobody can say what it settles, but it is in
+the account and nothing is at stake. Filing a ₹2,86,440 inward remittance under
+"cannot resolve" makes that section's total read as exposure when the opposite
+is true, so it gets its own heading and stays out of the four.
+
 Deterministic and evidence-only, like every other module under
 ``fc/exceptions`` — no LLM (CLAUDE.md hard rule 2).
 """
@@ -24,13 +30,16 @@ from typing import Final, Literal
 
 __all__ = ["ACTION_GROUPS", "ActionGroup", "action_group", "group_label"]
 
-ActionGroup = Literal["act_today", "waiting", "books_fix", "cannot_resolve"]
+ActionGroup = Literal[
+    "act_today", "waiting", "books_fix", "cannot_resolve", "unidentified_inflow"
+]
 
 ACTION_GROUPS: Final[tuple[ActionGroup, ...]] = (
     "act_today",
     "waiting",
     "books_fix",
     "cannot_resolve",
+    "unidentified_inflow",
 )
 
 _LABELS: Final[dict[ActionGroup, str]] = {
@@ -38,6 +47,7 @@ _LABELS: Final[dict[ActionGroup, str]] = {
     "waiting": "Waiting",
     "books_fix": "Books fix",
     "cannot_resolve": "Cannot resolve",
+    "unidentified_inflow": "Unidentified inflows",
 }
 
 #: The cash and the processor's own report agree; what disagrees is the
@@ -60,7 +70,6 @@ _BOOKS_CATEGORIES: Final[frozenset[str]] = frozenset(
 _UNRESOLVABLE_CATEGORIES: Final[frozenset[str]] = frozenset(
     {
         "ambiguous_multi_candidate",
-        "unidentified_inflow",
         "reference_truncated",
         "nach_batch_unexploded",
         "unknown",
@@ -97,6 +106,11 @@ def action_group(
         return "waiting"
     if deadline is not None:
         return "act_today"
+    # Before the unresolvable check, which it would otherwise fall into: an
+    # inflow nobody can attribute is unresolvable *and* is not exposure, and
+    # only the second fact tells a reader what to feel about the total.
+    if category == "unidentified_inflow":
+        return "unidentified_inflow"
     if category in _UNRESOLVABLE_CATEGORIES:
         return "cannot_resolve"
     if category in _BOOKS_CATEGORIES:

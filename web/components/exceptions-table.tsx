@@ -19,6 +19,34 @@ const SOURCE_ICON: Record<string, typeof Landmark> = {
   razorpay: CreditCard,
 };
 
+type ActionGroup = ExceptionOut["action_group"];
+
+/**
+ * What to do, not what went wrong — and the order of the working day.
+ *
+ * A category names the shape of a discrepancy. It does not say whether
+ * somebody has to act this morning, whether the right move is to wait, whether
+ * the fix belongs in the daybook, or whether nothing in the files can settle
+ * it. Sorting by category interleaves four different jobs.
+ *
+ * The fifth heading sits beside the four rather than inside them: an
+ * unidentified inflow is money that *arrived*, and filing a ₹2,86,440 inward
+ * remittance under "cannot resolve" makes that section's total read as
+ * exposure when the money is in the account. Assigned server-side by
+ * `fc/exceptions/action.py`; this table renders the grouping it is given.
+ */
+const ACTION_SECTIONS: { group: ActionGroup; label: string; note: string }[] = [
+  { group: "act_today", label: "Act today", note: "a window is closing" },
+  { group: "waiting", label: "Waiting", note: "the system will look again" },
+  { group: "books_fix", label: "Books fix", note: "the daybook is what changes" },
+  { group: "cannot_resolve", label: "Cannot resolve", note: "no file here can settle it" },
+  {
+    group: "unidentified_inflow",
+    label: "Unidentified inflows",
+    note: "money arrived · nothing at stake",
+  },
+];
+
 const TIER_LABEL: Record<ExceptionOut["tier"], { label: string; tone: "error" | "amber" | "success" }> = {
   escalate: { label: "HIGH", tone: "error" },
   monitor: { label: "MONITOR", tone: "amber" },
@@ -212,8 +240,24 @@ export function ExceptionsTable({
           </tr>
         </thead>
         <tbody>
-          {filtered.map((row) => {
-            const Icon = SOURCE_ICON[row.source] ?? CreditCard;
+          {ACTION_SECTIONS.flatMap((section) => {
+            const group = filtered.filter((r) => r.exception.action_group === section.group);
+            if (group.length === 0) return [];
+            const total = group.reduce((sum, r) => sum + r.exception.amount_paise, 0);
+            return [
+              <tr key={`head-${section.group}`} className="bg-[color:var(--neutral-bg)]">
+                <td colSpan={enableBulk ? 8 : 7} className="px-5 py-2">
+                  <span className="text-[11.5px] font-semibold uppercase tracking-wide text-text-heading">
+                    {section.label} · {group.length}
+                  </span>
+                  <span className="ml-2 text-[11px] text-text-muted">{section.note}</span>
+                  <span className="float-right fc-numeric text-[11.5px] text-text-muted">
+                    {formatPaise(total)}
+                  </span>
+                </td>
+              </tr>,
+              ...group.map((row) => {
+                const Icon = SOURCE_ICON[row.source] ?? CreditCard;
             const tier = TIER_LABEL[row.exception.tier];
             const href = linkTo?.(row.exception.exception_id);
             return (
@@ -263,6 +307,8 @@ export function ExceptionsTable({
                 </td>
               </tr>
             );
+              }),
+            ];
           })}
         </tbody>
       </table>
