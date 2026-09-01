@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { Landmark, Database, CreditCard } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
@@ -33,8 +34,14 @@ export async function fetchSourcesBundle(runId: string): Promise<SourcesBundle> 
 }
 
 export default function DataSourcesPage() {
+  const router = useRouter();
   const { summary, refresh } = useRun();
   const runId = summary?.run.run_id;
+
+  function onRunComplete() {
+    refresh();
+    router.push("/");
+  }
   const { data } = useQuery({
     queryKey: queryKeys.sources(runId),
     queryFn: () => fetchSourcesBundle(runId!),
@@ -119,7 +126,7 @@ export default function DataSourcesPage() {
         })}
       </div>
 
-      <IngestPanel onComplete={refresh} />
+      <IngestPanel onComplete={onRunComplete} />
     </div>
   );
 }

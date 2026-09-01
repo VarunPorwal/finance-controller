@@ -131,7 +131,7 @@ export default function ReconcileHome() {
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white"
           >
             <RefreshCw width={15} height={15} />
-            Run reconciliation
+            Ingest
           </button>
         </div>
       </div>
