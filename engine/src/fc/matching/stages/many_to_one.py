@@ -119,8 +119,11 @@ class SubsetOutcome:
 
     #: The single subset that fits, or ``None`` when none or several do.
     subset: tuple[str, ...] | None
-    #: Distinct subsets landing inside the tolerance window, saturated at 2. Past
-    #: two the exact count is irrelevant: the answer is already "cannot tell".
+    #: Distinct subsets tied at the minimum residual within the tolerance
+    #: window, saturated at 2. Past two the exact count is irrelevant: the
+    #: answer is already "cannot tell". A subset landing further from the
+    #: target than the best one found does not count here at all — it lost,
+    #: not tied.
     answers: int
     steps_used: int
     budget_exhausted: bool = False
@@ -148,8 +151,17 @@ def bounded_subset_sum(
     lives in the *count* of subsets reaching each sum, and that saturates at two
     and is never enumerated.
 
-    Every loop runs over a sorted key list and every witness is chosen by ``min``,
-    so the answer never depends on dict ordering (hard rule 9).
+    Every reachable sum inside the window is a *candidate*, not automatically a
+    tie: an exact match (residual 0) beats one that only clears tolerance by
+    coincidence. The winner is whichever candidate sits closest to ``target``;
+    ``ambiguous_multi_candidate`` is reserved for two or more candidates tied at
+    that same minimum residual, never for "more than one sum happened to fall
+    inside the window." This narrows *which* already-tolerance-passing subset is
+    picked — it cannot select a subset the window would have rejected, so it is
+    a selection rule, not a wider tolerance.
+
+    Every loop runs over a sorted key list and ties are broken by ``min``, so
+    the answer never depends on dict ordering (hard rule 9).
     """
     low, high = target - tolerance, target + tolerance
     n = len(values)
@@ -197,8 +209,9 @@ def bounded_subset_sum(
             seen_count, seen_witness = state.get(moved, (0, witness))
             state[moved] = (min(2, seen_count + count), min(seen_witness, witness))
 
-    answers = 0
+    best_residual: int | None = None
     best: tuple[int, ...] | None = None
+    tied_at_best = 0
     for reached in sorted(state):
         if not low <= reached <= high:
             continue
@@ -206,12 +219,18 @@ def bounded_subset_sum(
         if not witness:
             # The empty subset sums to zero without asserting anything.
             continue
-        answers = min(2, answers + count)
-        if best is None:
+        residual = abs(reached - target)
+        if best_residual is None or residual < best_residual:
+            best_residual = residual
             best = witness
+            tied_at_best = count
+        elif residual == best_residual:
+            tied_at_best = min(2, tied_at_best + count)
 
-    if answers != 1 or best is None:
-        return SubsetOutcome(None, answers, steps)
+    if best is None:
+        return SubsetOutcome(None, 0, steps)
+    if tied_at_best > 1:
+        return SubsetOutcome(None, 2, steps)
     return SubsetOutcome(tuple(values[i][0] for i in best), 1, steps)
 
 

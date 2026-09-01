@@ -141,6 +141,15 @@ def classify_exceptions(
         event_id: match for match in cascade.matches for event_id in match.event_ids
     }
     covered: set[str] = set()
+    #: Ids the rule-gap loop decided were not a Rulebook question at all
+    #: (``considered == 0``) or were fully explained by one
+    #: (``may_auto_close``) — real conclusions about the *arithmetic*, but
+    #: neither is a claim that a bank row was ever found for the money. Kept
+    #: separate from ``covered`` so the fallback sweep below does not raise
+    #: a second, individual finding for them (the original reason this set
+    #: exists), while ``_settled_without_bank_credit`` — which asks a
+    #: different question, "did the credit arrive" — still gets to fire.
+    silenced: set[str] = set()
     found: list[Classified] = []
 
     for chargeback in _unrecorded_chargebacks(events, cascade.ledger_refs):
@@ -170,9 +179,12 @@ def classify_exceptions(
 
     for gap in rule_gaps:
         ids = tuple(event_id for event_id in gap.event_ids if event_id in by_id)
-        if not ids or any(event_id in covered for event_id in ids):
+        if not ids or any(event_id in covered or event_id in silenced for event_id in ids):
             continue
-        if gap.outcome.may_auto_close or gap.outcome.considered == 0:
+        if gap.outcome.may_auto_close:
+            covered.update(ids)
+            continue
+        if gap.outcome.considered == 0:
             # Fully explained, or no rule was ever scoped to this counterparty
             # at all (``considered == 0``) — own-store settlements land here,
             # since every rule in the starter pack that could apply to a
@@ -187,7 +199,7 @@ def classify_exceptions(
             # with zero rules scoped to it is silence, not a finding, and
             # treating it as one is what produced 58 false amount_variance
             # exceptions on the real corpus before this guard existed.
-            covered.update(ids)
+            silenced.update(ids)
             continue
         found.append(_from_rule_gap(gap, ids))
         covered.update(ids)
@@ -198,8 +210,26 @@ def classify_exceptions(
         found.append(_from_match(match, by_id))
         covered.update(match.event_ids)
 
+    # A sweep, not a leftover, for the same reason chargebacks are one: a
+    # settlement Razorpay has released the hold on and no stage ever
+    # attributed a bank row to must always be raised, regardless of why
+    # nothing else raised it. Run last, after matches and rule gaps have
+    # had their chance, so a settlement with a genuine, more specific
+    # finding (a real amount_variance the Rulebook was actually asked
+    # about, a stage refusal) keeps that finding — this only fires on what
+    # survives every other mechanism untouched. It ran into exactly that
+    # gap once when tried earlier in this function: a settlement with no
+    # rule scoped to its counterparty reads as `considered == 0` to the
+    # rule-gap loop above, which correctly treats "nobody asked a Rulebook
+    # question" as silence and marks it covered — which then also silenced
+    # the one thing that should never be silent, the settlement never
+    # reaching the bank at all.
+    for missing in _settled_without_bank_credit(events, cascade, covered=covered):
+        found.append(missing)
+        covered.update(missing.event_ids)
+
     for event_id in cascade.unmatched_event_ids:
-        if event_id in covered:
+        if event_id in covered or event_id in silenced:
             continue
         found.append(_from_unmatched(by_id[event_id], events))
         covered.add(event_id)
@@ -251,6 +281,65 @@ def _unrecorded_chargebacks(
                 rail=event.rail,
                 gross_paise=amount,
                 gap_paise=amount,
+            )
+        )
+    return tuple(out)
+
+
+def _settled_without_bank_credit(
+    events: Sequence[TransactionEvent], cascade: CascadeResult, *, covered: set[str]
+) -> tuple[Classified, ...]:
+    """A settlement whose hold has released, with no bank row ever
+    attributed to it by any stage — the batch's whole payout, not any one
+    of its rows, since "missing_in_bank" is a claim about the credit that
+    never arrived, not about a line item.
+
+    ``on_hold`` is the field this build has for "settled" (PRD's Razorpay
+    row carries its own ``settled`` boolean, but nothing propagates it onto
+    ``TransactionEvent`` today, and adding a column is a schema change this
+    fix does not need): a row still on hold has not settled yet by
+    definition, so it is excluded rather than flagged as a settlement that
+    should have reached the bank and did not.
+
+    Scoped to whole settlements, not individual rows, because a partially-
+    matched settlement (some of its rows folded into a group, some not) is
+    a different, narrower question already covered by whatever claimed the
+    matched rows — this only fires when *none* of a settlement's rows were
+    ever attributed anywhere.
+    """
+    matched = cascade.matched_event_ids
+    by_settlement: dict[str, list[TransactionEvent]] = {}
+    for event in events:
+        if event.source == "razorpay" and event.settlement_id and not event.on_hold:
+            by_settlement.setdefault(event.settlement_id, []).append(event)
+
+    out: list[Classified] = []
+    for settlement_id, rows in sorted(by_settlement.items()):
+        if any(row.event_id in matched or row.event_id in covered for row in rows):
+            continue
+        rows = sorted(rows, key=lambda r: r.event_id)
+        net = sum(-r.amount_paise if r.direction == "debit" else r.amount_paise for r in rows)
+        amount = abs(net)
+        utrs = sorted({r.utr for r in rows if r.utr})
+        settled_date = max((r.effective_date for r in rows), default=None)
+        utr_note = f", UTR {utrs[0]}" if utrs else ""
+        date_note = f" (settled {settled_date.isoformat()})" if settled_date else ""
+        out.append(
+            Classified(
+                event_ids=tuple(r.event_id for r in rows),
+                category="missing_in_bank",
+                amount_paise=amount,
+                residual_paise=amount,
+                reason=(
+                    f"settlement {settlement_id} net {fmt_inr(amount)}{utr_note} released by "
+                    f"Razorpay{date_note}, no bank credit was attributed to it by any stage"
+                ),
+                confidence=Decimal(1),
+                counterparty_norm=rows[0].counterparty_norm,
+                rail=rows[0].rail,
+                gross_paise=amount,
+                gap_paise=amount,
+                expected_resolution_date=settled_date,
             )
         )
     return tuple(out)
