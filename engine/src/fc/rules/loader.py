@@ -334,11 +334,41 @@ def _build_scope(raw: object, where: str) -> Scope:
         raise RuleSourceError(f"{where}: invalid scope: {exc}") from exc
 
 
+#: A rate card names its layers in the vocabulary of a rate card -- "tax",
+#: "tcs", "tds" -- while :data:`~fc.models.rule.DeductionType` names them in
+#: the Rulebook's. They are the same layers, and a rulebook written by a
+#: finance team should load without being translated by hand first; refusing
+#: it is a vocabulary argument, not a safety check. Applied to ``basis`` as
+#: well as ``type``, so a ``basis: tax`` still chains onto the line above it.
+_DEDUCTION_ALIASES: dict[str, str] = {
+    "tax": "gst_on_fee",
+    "gst": "gst_on_fee",
+    "gst_on_commission": "gst_on_fee",
+    "tds": "tds_194o",
+    "tds_194_o": "tds_194o",
+    "tcs": "custom",
+    "rolling_reserve": "reserve",
+}
+
+
+def _canonical_deduction(item: object) -> object:
+    """Rewrite a rate card's layer names into the Rulebook's."""
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+    for key in ("type", "basis"):
+        value = out.get(key)
+        if isinstance(value, str):
+            out[key] = _DEDUCTION_ALIASES.get(value.strip().lower(), value)
+    return out
+
+
 def _build_deductions(raw: object, where: str) -> tuple[Deduction, ...]:
     if raw is None:
         raw = []
     if not isinstance(raw, list):
         raise RuleSourceError(f"{where}: 'deductions' must be a list")
+    raw = [_canonical_deduction(item) for item in raw]
 
     produced: list[str] = ["gross", "net"]
     built: list[Deduction] = []

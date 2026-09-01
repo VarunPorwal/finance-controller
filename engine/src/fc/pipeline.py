@@ -39,11 +39,26 @@ from fc.models.exception_ import Cluster, Exception_, ExceptionStatus, ResolvedB
 from fc.models.ids import deterministic_factory
 from fc.models.money import fmt_inr
 from fc.models.rule import Rule
-from fc.models.transaction import TransactionEvent
+from fc.models.transaction import TransactionEvent, is_bank_account
 from fc.rules.apply import apply_rules
 from fc.rules.loader import DEFAULT_RULES_PATH, load_rules
 
 __all__ = ["PIPELINE_STAGES", "PipelineResult", "main", "run_pipeline"]
+
+#: A marketplace payout's Tally Receipt narrates the settlement it closes as
+#: "Settlement credit {settlement_id}" (``fc.generator.tally_gen``). This is
+#: the only place that reference gets read back out, and it must stay in step
+#: with the generator's own narration string or the Rulebook silently stops
+#: finding batches to apply to (CLAUDE.md's IDFC/ICICI/Tally-XML note applies
+#: here too: change both sides in the same commit).
+#:
+#: It is *not* general, and reading the id through
+#: ``fc.matching.ledger_refs`` instead does not make it so: that module's
+#: pattern requires a 26-character ULID body, which the second corpus's
+#: ``setl_HRSXpatxfVb1gq`` is not. Generalising this path means teaching
+#: reference extraction the id shapes real gateways emit, and that is a change
+#: with its own blast radius — not a swap to make here in passing.
+_SETTLEMENT_RECEIPT_REF = re.compile(r"Settlement credit (\S+)")
 
 PIPELINE_STAGES: Final[tuple[str, ...]] = (
     "ingest",
@@ -57,14 +72,6 @@ PIPELINE_STAGES: Final[tuple[str, ...]] = (
     "tier_and_prioritise",
     "cash_bridge",
 )
-
-#: A marketplace payout's Tally Receipt narrates the settlement it closes as
-#: "Settlement credit {settlement_id}" (``fc.generator.tally_gen``). This is
-#: the only place that reference gets read back out, and it must stay in step
-#: with the generator's own narration string or the Rulebook silently stops
-#: finding batches to apply to (CLAUDE.md's IDFC/ICICI/Tally-XML note applies
-#: here too: change both sides in the same commit).
-_SETTLEMENT_RECEIPT_REF = re.compile(r"Settlement credit (\S+)")
 
 #: Vouchers that *are* a bank movement by definition. Tally's day book can be
 #: exported one row per voucher rather than one row per leg, and when it is, a
@@ -102,6 +109,13 @@ def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) 
     """
     if event.ledger_account in bank_ledgers or event.counterparty in bank_ledgers:
         return True
+    # Configured names are exact and tenant-specific: ``bank_ledger_names``
+    # defaults to one account of one merchant, so a tenant nobody has
+    # configured yet would have no bank ledger at all. ``is_bank_account``
+    # recognises one by name shape instead, which is what makes the engine
+    # work on a chart of accounts it has never been told about.
+    if is_bank_account(event.ledger_account) or is_bank_account(event.counterparty):
+        return True
     return (event.voucher_type or "") in _CASH_SIDE_VOUCHERS
 
 
@@ -110,7 +124,7 @@ def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) 
 #: imported: the two modules are asking different questions of the same
 #: field (the bridge sums it, this module verifies its rate), and a shared
 #: constant would suggest a coupling that does not otherwise exist.
-_TDS_MARKER = "TDS"
+_TDS_MARKER = "tds"
 
 
 @dataclass(frozen=True)
@@ -523,7 +537,7 @@ def _own_store_tds_gaps(
     for event in events:
         if event.source != "razorpay" or event.txn_type != "adjustment":
             continue
-        if _TDS_MARKER not in str(event.raw.get("description") or ""):
+        if _TDS_MARKER not in str(event.raw.get("description") or "").lower():
             continue
         if event.settlement_id in skip_settlements:
             continue

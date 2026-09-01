@@ -43,45 +43,13 @@ EPOCH_MS = 1_780_000_000_000
 INGESTED_AT = datetime(2026, 8, 29, tzinfo=UTC)
 RUN_ID = "run_dataset"
 
-#: An external rules file names its deduction layers in the vocabulary of a
-#: rate card ("tax", "tcs"), not in the Rulebook's own (:data:`DeductionType`).
-#: One mapping, applied to type and basis alike, so a `basis: commission`
-#: still chains onto the line above it.
-_DEDUCTION_ALIASES = {
-    "tax": "gst_on_fee",
-    "gst": "gst_on_fee",
-    "tds": "tds_194o",
-    "tcs": "custom",
-    "mdr": "mdr",
-    "commission": "commission",
-    "reserve": "reserve",
-    "platform_fee": "platform_fee",
-}
-
-
-def _canonical_deduction(entry: Mapping[str, Any]) -> dict[str, Any]:
-    out = dict(entry)
-    for key in ("type", "basis"):
-        value = out.get(key)
-        if isinstance(value, str):
-            out[key] = _DEDUCTION_ALIASES.get(value.lower(), value)
-    rate = out.get("rate")
-    if isinstance(rate, str):
-        out["rate"] = Decimal(rate)
-    return out
-
 
 def load_external_rules(path: Path, *, tenant_id: str) -> tuple[Any, ...]:
     entries = json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
     if isinstance(entries, dict):
         entries = entries.get("rules", [])
-    normalised = []
-    for entry in entries:
-        body = dict(entry)
-        body["deductions"] = [_canonical_deduction(d) for d in body.get("deductions") or []]
-        normalised.append(body)
     return build_ruleset_from_entries(
-        normalised,
+        entries,
         source_label=str(path),
         tenant_id=tenant_id,
         created_at=INGESTED_AT,

@@ -318,8 +318,29 @@ def _to_raw_row(fields: dict[str, str]) -> RawBankRow:
     )
 
 
+#: Date shapes a statement export actually ships in. ``%d/%m/%Y`` is HDFC
+#: NetBanking's, and it is tried first because it is the one this build was
+#: written against — but a single hard-coded format turns *every row* of an
+#: otherwise well-formed file into a rejection, which is the loudest possible
+#: failure for the smallest possible reason. Order matters: ``%d/%m/%Y`` and
+#: ``%m/%d/%Y`` are ambiguous for the first twelve days of a month, so the
+#: Indian reading wins and the American one is never tried.
+_DATE_FORMATS: tuple[str, ...] = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y", "%d-%b-%Y")
+
+
 def _parse_ddmmyyyy(text: str) -> date:
-    return datetime.strptime(text.strip(), "%d/%m/%Y").date()
+    """Parse a statement date, trying each known shape in order.
+
+    Named for the format it was born with; kept because callers read it as
+    "the statement's date column", which is what it still is.
+    """
+    value = text.strip()
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised date {value!r}; tried {', '.join(_DATE_FORMATS)}")
 
 
 def _optional_amount(text: str) -> int | None:

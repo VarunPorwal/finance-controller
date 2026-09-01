@@ -154,7 +154,7 @@ def _parse_rows(
             voucher_type = _required(row, "voucher_type")
             if voucher_type not in VOUCHER_TYPES:
                 raise ValueError(f"unknown voucher_type: {voucher_type!r}")
-            voucher_date = date.fromisoformat(_required(row, "voucher_date"))
+            voucher_date = _parse_voucher_date(_required(row, "voucher_date"))
             debit_paise = to_paise(row.get("debit") or "0")
             credit_paise = to_paise(row.get("credit") or "0")
             direction, amount_paise = _leg(debit_paise, credit_paise)
@@ -222,6 +222,21 @@ def _voucher_reference(raw: object, *, narration: object = None) -> tuple[str | 
     if _UTR_SHAPED.match(value):
         return value, None
     return None, value
+
+
+#: Tally exports ISO; a hand-edited or re-saved daybook routinely does not.
+#: Same reasoning as ``fc.ingest.bank_csv._DATE_FORMATS``, same precedence:
+#: day-first before month-first, because the ambiguous dates are Indian.
+_VOUCHER_DATE_FORMATS: tuple[str, ...] = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d-%b-%Y")
+
+
+def _parse_voucher_date(text: str) -> date:
+    for fmt in _VOUCHER_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised voucher_date {text!r}")
 
 
 def _required(row: Mapping[str, Any], key: str) -> str:

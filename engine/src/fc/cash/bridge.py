@@ -60,7 +60,12 @@ __all__ = [
 #: mapped onto its own ``TransactionEvent`` field because ``description`` was
 #: never promoted off ``raw`` (CLAUDE.md: "if either side changes ... change
 #: the other side in the same commit" — this is that other side, for now).
-_TDS_MARKER = "TDS"
+#: Compared case-insensitively (see ``_describes``). A settlement adjustment's
+#: description is prose written by whoever produced the export -- "TDS 194-O",
+#: "tds 194o", "Rolling Reserve Hold" -- and matching it exactly meant one
+#: report's capitalisation silently dropped a whole deduction out of the bridge
+#: and into the unexplained line.
+_TDS_MARKER = "tds"
 _RESERVE_RELEASE_MARKER = "reserve release"
 _RESERVE_HOLD_MARKER = "reserve hold"
 
@@ -379,7 +384,7 @@ def compute_cash_bridge(
     for event in gateway:
         if event.source != "razorpay" or event.txn_type != "adjustment":
             continue
-        description = str(event.raw.get("description") or "")
+        description = str(event.raw.get("description") or "").lower()
         if _TDS_MARKER in description:
             tds_paise += abs(event.amount_paise)
             tds_ids.append(event.event_id)
