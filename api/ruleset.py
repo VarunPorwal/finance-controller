@@ -37,8 +37,10 @@ previous run actually used rather than whatever is active now. Without it,
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 
 from sqlalchemy import select, tuple_
@@ -201,11 +203,46 @@ async def seed_rules_from_yaml(
     return inserted
 
 
+@cache
+def _shipped_rule_sets() -> Mapping[str, str]:
+    """``rule_id -> set name`` for every rulebook the repo ships.
+
+    Rules written before sets existed carry no set name, and cannot be given
+    one after the fact: a database trigger makes an active rule immutable
+    (CLAUDE.md hard rule 8), and it is right to — a rule whose scope can be
+    edited in place is not a rule anyone can audit. So provenance is recovered
+    rather than stamped: a rule id that appears in a shipped rulebook came from
+    that rulebook, which is a fact about the file, not a guess about the row.
+
+    Anything else — an id from an upload nobody named — is the default set.
+    """
+    found: dict[str, str] = {}
+    for name, path in ((DEMO_RULE_SET, Path(DEFAULT_RULES_PATH)), *BUNDLED_RULE_SETS):
+        if not path.exists():
+            continue
+        try:
+            loaded = load_rules(
+                path, tenant_id="_", created_at=datetime(2026, 1, 1, tzinfo=UTC), rule_set=name
+            )
+        except Exception:  # noqa: BLE001 - a broken shipped file must not break resolution
+            continue
+        for rule in loaded.rules:
+            found.setdefault(rule.rule_id, name)
+    return found
+
+
 def rule_set_of(row: RuleRow) -> str:
-    """Which set a stored rule belongs to; unnamed rules are the default set."""
+    """Which set a stored rule belongs to.
+
+    The scope wins where it names one. Otherwise the row predates rule sets and
+    its provenance is recovered from the shipped rulebooks; failing that it is
+    an unnamed upload and belongs to the default set.
+    """
     scope = row.scope if isinstance(row.scope, dict) else {}
     value = scope.get("rule_set")
-    return value if isinstance(value, str) and value else DEFAULT_RULE_SET
+    if isinstance(value, str) and value:
+        return value
+    return _shipped_rule_sets().get(row.rule_id, DEFAULT_RULE_SET)
 
 
 async def resolve_ruleset(

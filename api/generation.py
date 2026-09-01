@@ -19,6 +19,7 @@ schema is frozen.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy import func, select
@@ -44,16 +45,43 @@ __all__ = ["generate_for_run", "narrative_for_run"]
 _LOG = logging.getLogger("fc.generation")
 
 
+#: How long the prose pass may hold the request open. It runs *after* the
+#: reconciliation is computed and persisted, so every second past this is a
+#: second the Run button spins for wording nobody is waiting on — and on a slow
+#: provider it is what turns a finished run into "could not reach the API".
+#: Exceeding it is the same outcome as any other failure here: the
+#: deterministic template stands.
+NARRATIVE_BUDGET_SECONDS = 8.0
+
+
 async def generate_for_run(
     session: AsyncSession, *, run_id: str, tenant_id: str, client: LLMClient
 ) -> dict[str, int]:
-    """The whole post-run pass. Returns what it did, for the run summary.
+    """The whole post-run pass, bounded. Returns what it did, for the summary.
 
-    Never raises. Every failure inside is logged and skipped, and the
-    deterministic label or template stays in place — which is the same outcome
-    as ``LLM_MODE=off``, so the failure path is the one that is exercised on
-    every offline run rather than only in an incident.
+    Never raises, and never runs longer than
+    :data:`NARRATIVE_BUDGET_SECONDS`. Every failure inside is logged and
+    skipped, and the deterministic label or template stays in place — which is
+    the same outcome as ``LLM_MODE=off``, so the failure path is the one that
+    is exercised on every offline run rather than only in an incident.
     """
+    try:
+        return await asyncio.wait_for(
+            _generate_for_run(session, run_id=run_id, tenant_id=tenant_id, client=client),
+            timeout=NARRATIVE_BUDGET_SECONDS,
+        )
+    except TimeoutError:
+        _LOG.warning(
+            "post-run prose exceeded %.0fs for %s; deterministic wording stands",
+            NARRATIVE_BUDGET_SECONDS,
+            run_id,
+        )
+        return {"narrative": 0, "cluster_labels": 0, "explanations": 0}
+
+
+async def _generate_for_run(
+    session: AsyncSession, *, run_id: str, tenant_id: str, client: LLMClient
+) -> dict[str, int]:
     written = {"narrative": 0, "cluster_labels": 0, "explanations": 0}
     try:
         narrative, _ = await narrative_for_run(

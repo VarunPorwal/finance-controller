@@ -42,6 +42,11 @@ from fc.rules.evaluator import evaluate_deductions
 from fc.rules.learner import Resolution, detect_drafts
 from fc.rules.loader import RuleSourceError, build_ruleset_from_entries, version_hash
 
+#: Where an upload lands when the caller names no set. Deliberately not the
+#: demo set: an unnamed upload must never retire the rulebook the demo corpus
+#: is pinned to, which is the collision rule sets exist to prevent.
+UPLOADED_RULE_SET = "uploaded"
+
 router = APIRouter(prefix="/rules", tags=["rules"])
 
 
@@ -297,7 +302,7 @@ async def import_rules(
             tenant_id=user.tenant_id,
             created_at=now,
             default_status="active",
-            rule_set=rule_set or DEFAULT_RULE_SET,
+            rule_set=rule_set or UPLOADED_RULE_SET,
         )
     except RuleSourceError as exc:
         raise ApiError(422, "invalid rules file", str(exc)) from exc
