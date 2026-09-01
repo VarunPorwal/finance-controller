@@ -198,10 +198,23 @@ def find_matches(
         if not reconciling:
             continue
         if len(reconciling) > 1:
+            # event_ids names every candidate's own rows, not just the
+            # credit — the whole point of raising this is a human being able
+            # to see which settlements are competing, not just that
+            # something was ambiguous. Also what keeps
+            # ``_ambiguous_order_attribution`` from separately re-flagging
+            # the same two settlements as an unrelated order-attribution
+            # question once the credit's own ambiguity already covers them.
+            candidate_ids = tuple(
+                sorted(
+                    {credit.event_id}
+                    | {e.event_id for sid, _, _ in reconciling for e in by_settlement[sid]}
+                )
+            )
             refusals.append(
                 StageRefusal(
                     category="ambiguous_multi_candidate",
-                    event_ids=(credit.event_id,),
+                    event_ids=candidate_ids,
                     amount_paise=credit.amount_paise,
                     reason=(
                         f"{len(reconciling)} settlements reconcile to this credit within "

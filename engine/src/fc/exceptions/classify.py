@@ -147,7 +147,17 @@ def classify_exceptions(
         found.append(chargeback)
         covered.update(chargeback.event_ids)
 
-    for attribution in _ambiguous_order_attribution(events, match_of, cascade.ledger_refs):
+    # A stage refusal is a more specific question than order attribution — a
+    # credit ambiguous between two whole settlements already explains why
+    # those settlements' orders can't be told apart individually; asking the
+    # narrower question again would raise the same money as two unrelated
+    # findings instead of one.
+    refused_ids = frozenset(
+        event_id for refusal in cascade.refusals for event_id in refusal.event_ids
+    )
+    for attribution in _ambiguous_order_attribution(
+        events, match_of, cascade.ledger_refs, exclude=refused_ids
+    ):
         found.append(attribution)
         covered.update(attribution.event_ids)
 
@@ -250,9 +260,16 @@ def _ambiguous_order_attribution(
     events: Sequence[TransactionEvent],
     match_of: Mapping[str, MatchResult],
     ledger_refs: LedgerRefIndex,
+    *,
+    exclude: frozenset[str] = frozenset(),
 ) -> tuple[Classified, ...]:
     """Two orders whose ledger Sales leg cannot be told apart — inside a
     settlement whose *cash* is otherwise fully proven.
+
+    ``exclude`` is the event ids a stage refusal already named — an order
+    named there is already part of a broader "which settlement" ambiguity,
+    a question this function's narrower "which order within one settlement"
+    framing does not apply to and must not re-ask.
 
     Two separate claims, and this function exists to keep them separate: the
     settlement auto-closes (the bank credit, the gateway rows and the
@@ -277,7 +294,7 @@ def _ambiguous_order_attribution(
     for event in events:
         if event.source != "razorpay" or event.txn_type != "payment" or not event.order_id:
             continue
-        if event.order_id in named_order_ids:
+        if event.order_id in named_order_ids or event.event_id in exclude:
             continue
         gross = event.amount_paise + (event.fee_paise or 0)
         match = match_of.get(event.event_id)

@@ -259,7 +259,7 @@ def _run_stage(
     cfg: Config,
 ) -> StageOutput:
     if stage == "exact_ref":
-        return exact_ref_stage.find_matches(events, ledger_refs=ledger_refs)
+        return exact_ref_stage.find_matches(events, ledger_refs=ledger_refs, cfg=cfg)
     if stage == "fee_adjusted":
         return fee_adjusted_stage.find_matches(all_events, unmatched=unmatched, cfg=cfg)
     if stage == "date_shift":

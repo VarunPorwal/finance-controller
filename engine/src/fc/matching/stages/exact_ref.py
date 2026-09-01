@@ -25,8 +25,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
+from fc.config import Config
 from fc.matching.ledger_refs import LedgerRefIndex
 from fc.matching.stages import StageMatch, StageOutput, reference_is_truncated
+from fc.matching.tolerance import tolerance_paise
 from fc.models.transaction import TransactionEvent
 
 __all__ = [
@@ -113,7 +115,58 @@ def trusted_references(
     return tuple(facts)
 
 
-def find_matches(events: Sequence[TransactionEvent], *, ledger_refs: LedgerRefIndex) -> StageOutput:
+#: A group is only trusted on reference agreement alone when there is
+#: nothing to check it against — a bank leg present means there is an
+#: independent number (what actually hit the account) to compare the
+#: gateway/ledger side's own net against. §6.5's tolerance model applies the
+#: same way it does everywhere else; ``n_txns`` is the non-bank leg's own
+#: row count, since that side is what the tolerance's rounding-drift term is
+#: about.
+def _net_paise(members: Sequence[TransactionEvent]) -> int:
+    """Signed net using "money moving toward the account" as positive.
+
+    Bank and razorpay both use ``credit`` for that already. Tally does not:
+    a Receipt against the bank ledger books the increase as a *debit* (an
+    asset account, in Tally's own convention), so ledger's sign is the
+    opposite of the other two sources for the same movement of money, not a
+    variant spelling of it.
+    """
+    total = 0
+    for e in members:
+        sign = 1 if e.direction == "credit" else -1
+        if e.source == "ledger":
+            sign = -sign
+        total += sign * e.amount_paise
+    return total
+
+
+def _bank_side_balances(
+    unique: Sequence[str], by_id: dict[str, TransactionEvent], cfg: Config
+) -> bool:
+    bank = [by_id[e] for e in unique if by_id[e].source == "bank"]
+    if not bank:
+        return True
+    other = [by_id[e] for e in unique if by_id[e].source != "bank"]
+    if not other:
+        return True
+    # Only a single other source: a razorpay settlement's rows decompose
+    # into one net figure, and so does a ledger voucher's, but the two
+    # together do not simply add — a ledger Receipt mirrors the same bank
+    # credit a razorpay settlement's rows already net to, not a second
+    # contribution on top of it. Correctly reconciling that combined
+    # arithmetic is §6.4's job (``fc.matching.three_way``, which runs after
+    # this stage), not something to approximate here — so a three-way
+    # component is left exactly as exact_ref already formed it.
+    if len({e.source for e in other}) != 1:
+        return True
+    delta = _net_paise(bank) - _net_paise(other)
+    tol = tolerance_paise(abs(_net_paise(other)), len(other), cfg)
+    return abs(delta) <= tol
+
+
+def find_matches(
+    events: Sequence[TransactionEvent], *, ledger_refs: LedgerRefIndex, cfg: Config
+) -> StageOutput:
     """Group events by transitive agreement on trusted reference values.
 
     Reference agreement is transitive, and the group is the unit of truth. One
@@ -128,6 +181,17 @@ def find_matches(events: Sequence[TransactionEvent], *, ledger_refs: LedgerRefIn
     sources is one match, carrying one evidence entry per reference field that
     helped form it. Single-source components are not matches: two gateway rows
     sharing a settlement id are the same batch, not money crossing a boundary.
+
+    A component that includes a bank leg is additionally required to
+    *balance*: the bank side's net must agree with the other side's net
+    within §6.5 tolerance. A reference hit proves these rows are talking
+    about the same batch, not that every row of that batch is present — a
+    bank credit consolidating two settlements but quoting only one UTR
+    exact-matches that one settlement and nothing stops it from closing on
+    a partial batch. Refusing to close it here (not raising it as a
+    refusal — just declining to emit the match) returns every member to the
+    unmatched pool so a grouping or subset-sum stage downstream can find the
+    composition that actually accounts for the credit.
     """
     parent: dict[str, str] = {}
     fields_by_root: dict[str, set[str]] = {}
@@ -167,10 +231,13 @@ def find_matches(events: Sequence[TransactionEvent], *, ledger_refs: LedgerRefIn
         components.setdefault(find(event.event_id), []).append(event.event_id)
 
     source_of = {event.event_id: event.source for event in events}
+    by_id = {event.event_id: event for event in events}
     matches: list[StageMatch] = []
     for root, members in sorted(components.items()):
         unique = tuple(sorted(members))
         if len(unique) < 2 or len({source_of[e] for e in unique}) < 2:
+            continue
+        if not _bank_side_balances(unique, by_id, cfg):
             continue
         agreed = tuple(sorted(fields_by_root.get(root, set())))
         matches.append(
