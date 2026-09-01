@@ -245,6 +245,19 @@ target that enforces them.
   `icici.py`, the XML tag aliases in `fc/ingest/tally.py`, or what the
   generator emits — change the other side in the same commit, or ingestion
   silently stops matching what it's fed.
+- **Never reconstruct a figure the source already states.** Gross was
+  computed as `credit + fee`, which assumes GST is folded into the fee.
+  When a source states `amount = credit + fee + tax` separately, gross
+  loses the tax and MDR (computed as `fee − tax`) subtracts the same
+  GST twice. The two errors cancel in `expected_net`, so the bridge
+  balances and every postcondition passes while both displayed figures
+  are wrong. If the row states a value, read it.
+- **A match only proves money moved if the bank is one of the sources.**
+  Gateway and ledger are both statements of what *should* have
+  happened. A group with no bank leg cannot auto-close.
+- **Replay reuses stored events and won't pick up parser changes.**
+  If ingestion logic changed, re-ingest through /sources — replaying
+  runs the new engine over rows the old parser wrote.  
 
 ## Git
 
