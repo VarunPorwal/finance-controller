@@ -111,6 +111,7 @@ export default function ReconcileHome() {
             type="button"
             disabled={reconciling}
             onClick={runReconciliation}
+            title="Replays this run's stored events under the current rule book. Parser and ingest changes need a re-ingest, not a replay."
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50"
           >
             <RefreshCw width={15} height={15} />
@@ -118,6 +119,26 @@ export default function ReconcileHome() {
           </button>
         </div>
       </div>
+      {/*
+        The trap this line exists to close: "Run reconciliation" replays the
+        run's *stored events* under the current rule book, which is the whole
+        point when a rule changed — and silently the wrong tool when the
+        change was in ingest. A new narration pattern or reference field only
+        exists on rows the new parser wrote, so a replay runs the new engine
+        over the old parser's output and the improvement appears not to work.
+      */}
+      <p className="mb-3 text-[11.5px] text-text-muted">
+        Re-runs this run&rsquo;s stored records under the current rule book.
+        Changed how a statement is <em>parsed</em>?{" "}
+        <button
+          type="button"
+          onClick={() => router.push("/sources")}
+          className="text-primary underline underline-offset-2"
+        >
+          Re-ingest the files
+        </button>{" "}
+        instead — a replay reuses rows the previous parser wrote.
+      </p>
       {reconcileError && <p className="mb-3 text-xs text-amber-text">{reconcileError}</p>}
 
       {runId && <BooksVsBank runId={runId} />}

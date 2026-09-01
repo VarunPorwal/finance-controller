@@ -30,9 +30,7 @@ from typing import Final, Literal
 
 __all__ = ["ACTION_GROUPS", "ActionGroup", "action_group", "group_label"]
 
-ActionGroup = Literal[
-    "act_today", "waiting", "books_fix", "cannot_resolve", "unidentified_inflow"
-]
+ActionGroup = Literal["act_today", "waiting", "books_fix", "cannot_resolve", "unidentified_inflow"]
 
 ACTION_GROUPS: Final[tuple[ActionGroup, ...]] = (
     "act_today",

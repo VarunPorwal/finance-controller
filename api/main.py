@@ -41,9 +41,11 @@ from api.routers import (
     meta,
     rules,
     runs,
-    settings as settings_router,
 )
 from api.routers import eval as eval_router
+from api.routers import (
+    settings as settings_router,
+)
 from api.ruleset import seed_rules_from_yaml
 from fc.config import Config
 

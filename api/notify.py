@@ -177,10 +177,10 @@ async def notify_run_complete(
             f"<li>False auto-resolutions: {false_auto_resolutions}</li>"
             "</ul>"
             "<p><strong>Top exceptions by amount</strong></p>"
-            "<table cellpadding=\"4\"><tr><th>Category</th><th>Amount</th><th>Deadline</th></tr>"
+            '<table cellpadding="4"><tr><th>Category</th><th>Amount</th><th>Deadline</th></tr>'
             f"{rows}</table>"
-            f"<p><a href=\"{html.escape(app_url)}\">Open the app</a></p>"
-            f"<p style=\"color:#888;font-size:12px\">run_id: {html.escape(run_id)}</p>"
+            f'<p><a href="{html.escape(app_url)}">Open the app</a></p>'
+            f'<p style="color:#888;font-size:12px">run_id: {html.escape(run_id)}</p>'
         ),
         to=to,
     )

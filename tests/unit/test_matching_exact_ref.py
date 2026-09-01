@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+from fc.config import load_config
 from fc.ingest.narration.hdfc import HdfcNarrationParser
 from fc.matching.ledger_refs import index_ledger_refs
 from fc.matching.stages import reference_is_truncated
@@ -60,8 +61,13 @@ def _event(
     )
 
 
+#: Stage 1 balances a group that has a bank leg against the side that
+#: claims to be the money, and that tolerance comes from config.
+_CFG = load_config(env_file=None, environ={})
+
+
 def _run(events: list[TransactionEvent]) -> list[tuple[str, ...]]:
-    output = find_matches(events, ledger_refs=index_ledger_refs(events))
+    output = find_matches(events, ledger_refs=index_ledger_refs(events), cfg=_CFG)
     return sorted(m.event_ids for m in output.matches)
 
 

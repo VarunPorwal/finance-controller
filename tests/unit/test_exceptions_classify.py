@@ -35,6 +35,8 @@ def _event(
     txn_type: str | None = None,
     rail: str | None = None,
     order_id: str | None = None,
+    utr: str | None = None,
+    settlement_id: str | None = None,
     voucher_type: str | None = None,
     ledger_account: str | None = None,
     narration: str | None = None,
@@ -51,6 +53,8 @@ def _event(
         txn_date=date(2026, 6, day),
         rail=rail,
         order_id=order_id,
+        utr=utr,
+        settlement_id=settlement_id,
         txn_type=txn_type or ("payment" if source == "razorpay" else None),
         voucher_type=voucher_type,
         ledger_account=ledger_account,
@@ -132,10 +136,16 @@ _ORDER = "order_01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
 def test_an_unbooked_dispute_is_a_chargeback_regardless_of_match_state() -> None:
+    # Debit, explicitly. A dispute row is only a chargeback when it *subtracts*
+    # from the settlement; the same txn_type on a credit is the reversal, money
+    # already back in the merchant's favour and nothing for the books to record.
+    # The fixture defaulted to credit, so it had stopped exercising the rule it
+    # is named after.
     dispute = _event(
         "dp",
         source="razorpay",
         amount=50_000,
+        direction="debit",
         txn_type="dispute",
         order_id=_ORDER,
         raw={"dispute_id": "dp_X"},
@@ -246,13 +256,32 @@ def test_an_unmatched_gateway_row_is_missing_in_bank() -> None:
     assert found[0].category == "missing_in_bank"
 
 
-def test_an_unmatched_bank_credit_is_missing_in_gateway() -> None:
+def test_an_unmatched_bank_credit_in_the_gateway_lane_is_missing_in_gateway() -> None:
+    """The credit quotes a UTR the gateway report claims, so the gateway is the
+    counterpart it is missing from (:mod:`fc.lanes`)."""
+    utr = "HDFCN26010300001"
+    gateway = _event("pay", source="razorpay", amount=10_000, utr=utr, settlement_id="setl_1")
+    event = _event(
+        "bank", source="bank", amount=10_000, rail="neft", narration="NEFT CR:X", utr=utr
+    )
+    cascade = _minimal_cascade([gateway, event], unmatched=("bank",))
+
+    found = classify_exceptions([gateway, event], cascade)
+
+    assert next(f for f in found if f.event_ids == ("bank",)).category == "missing_in_gateway"
+
+
+def test_an_unmatched_bank_credit_outside_the_gateway_lane_is_an_unidentified_inflow() -> None:
+    """No reference ties it to the gateway, so "no settlement behind it" is the
+    wrong finding: nothing says there should have been one. Money arrived and
+    the files cannot say what it settles — which is not the same as exposure,
+    and is why it is kept out of the cannot-resolve total."""
     event = _event("bank", source="bank", amount=10_000, rail="neft", narration="NEFT CR:X")
     cascade = _minimal_cascade([event], unmatched=("bank",))
 
     found = classify_exceptions([event], cascade)
 
-    assert found[0].category == "missing_in_gateway"
+    assert found[0].category == "unidentified_inflow"
 
 
 def test_an_unmatched_nach_row_is_a_nach_batch() -> None:

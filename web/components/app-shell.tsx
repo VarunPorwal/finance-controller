@@ -37,7 +37,7 @@ import { fetchCashBridge } from "@/app/cash/loader";
 // matches byte-for-byte.
 const PREFETCH: Record<string, (runId: string) => { queryKey: readonly unknown[]; queryFn: () => Promise<unknown> } | null> = {
   "/": (runId) => ({ queryKey: queryKeys.homeHistory(runId), queryFn: () => fetchHomeBundle(runId) }),
-  "/exceptions": () => null, // ExceptionsTable/TriageQueue key off filters this shell doesn't know
+  "/exceptions": () => null, // ExceptionsTable keys off filters this shell does not know
   "/rules": () => ({ queryKey: queryKeys.rules({}), queryFn: fetchRulesAndSuggestions }),
   "/activity": (runId) => ({ queryKey: queryKeys.activityPage(runId), queryFn: () => fetchActivityBundle(runId) }),
   "/eval": (runId) => ({ queryKey: queryKeys.evalBundle(runId), queryFn: () => fetchEvalBundle(runId) }),

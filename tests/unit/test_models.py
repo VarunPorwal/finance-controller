@@ -110,7 +110,12 @@ def test_effective_date_prefers_value_date() -> None:
 
 def test_exception_categories_cover_the_classification_tree() -> None:
     categories = set(typing.get_args(ExceptionCategory))
-    assert len(categories) == 12
+    # Twelve from the §6.8 tree, plus three the lane model added: a bank row
+    # outside the gateway lane has a daybook counterpart, not a gateway one, so
+    # "unbooked_bank_entry" and "unidentified_inflow" are the findings it can
+    # produce, and "revenue_booked_not_settled" is the cut-off question a held
+    # payment raises against a sale already on the books.
+    assert len(categories) == 15
     assert AUTO_SAFE <= categories
     assert NEVER_AUTO <= categories
     assert not AUTO_SAFE & NEVER_AUTO

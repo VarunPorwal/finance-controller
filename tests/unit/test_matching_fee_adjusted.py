@@ -202,7 +202,10 @@ def test_two_settlements_reconciling_to_one_credit_produce_no_match() -> None:
         [*rows, _bank("b", amount=146_542)], unmatched=frozenset({"b"}), cfg=_cfg()
     )
     assert output.matches == ()
-    assert output.abstained == ("b",)
+    # The refusal names everything it declined to decide, not just the credit:
+    # both candidate settlements are part of the question, and a refusal listing
+    # only the bank row would leave their rows looking untouched by it.
+    assert set(output.abstained) == {"b", "p1", "p2", "q1", "q2"}
 
 
 def test_an_already_matched_credit_is_not_reconsidered() -> None:

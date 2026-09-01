@@ -49,7 +49,7 @@ from fc.eval.confusion import ConfusionMatrix, confusion_matrix, ratio
 from fc.eval.corpus import DATA_DIR, EPOCH_MS, INGESTED_AT, RUN_ID, TENANT_ID, Corpus, load_corpus
 from fc.eval.coverage_curve import CoveragePoint
 from fc.eval.coverage_curve import sweep as sweep_coverage
-from fc.matching.cascade import CascadeResult, run_cascade
+from fc.matching.cascade import CascadeResult
 from fc.matching.stages.exact_ref import reference_is_truncated
 from fc.models.exception_ import NEVER_AUTO
 from fc.models.ids import deterministic_factory
@@ -130,6 +130,11 @@ class EvalReport:
     corpus: Corpus
     cascade: CascadeResult
     pipeline: PipelineResult
+    #: The ruleset this run was produced under. Carried so
+    #: :func:`check_gates` can replay the run exactly; reloading the default
+    #: rulebook there instead would silently compare two different rulesets
+    #: whenever ``evaluate`` was given an override.
+    rules: tuple[Rule, ...]
     predicted_pairs: int
     correct_pairs: int
     true_pairs: int
@@ -278,6 +283,7 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
 
     return EvalReport(
         corpus=corpus,
+        rules=tuple(pipeline_rules),
         cascade=result,
         pipeline=pipeline_result,
         predicted_pairs=predicted,
@@ -679,33 +685,38 @@ class GateResult:
 def check_gates(report: EvalReport, cfg: Config) -> tuple[GateResult, ...]:
     """Evaluate the §12.5 gates this suite can measure.
 
-    Determinism is re-run rather than assumed: the cascade runs a second time
-    over the same corpus and the serialised matches, unmatched ids and refusals
-    are compared. That is §12.4's "same seed twice" - an engine whose exceptions
-    vary between runs cannot be audited, so it is a correctness gate, not a
-    nicety. It is an in-process comparison; the cross-process version, which is
-    what actually catches hash-order dependence, lives in ``tests/eval``.
+    Determinism is re-run rather than assumed: the whole pipeline runs a second
+    time over the same corpus, seed and ruleset, and the resulting matches,
+    unmatched ids and refusals are compared. That is §12.4's "same seed twice"
+    — an engine whose exceptions vary between runs cannot be audited, so this
+    is a correctness gate, not a nicety.
 
-    Re-runs only the cascade, not the full ``evaluate`` (which would also
-    re-sweep the coverage curve) - the cascade is what §12.4's determinism
-    check is about, and the corpus-level fields it compares here are exactly
-    the ones ``evaluate``'s own docstring names as the reproducibility claim.
+    It re-runs :func:`fc.pipeline.run_pipeline`, not :func:`run_cascade`
+    directly, and the difference is the whole point. The pipeline does not
+    hand the cascade the raw corpus: it first drops ledger rows whose voucher
+    never moves the bank account, so the cascade sees 816 of the corpus's 1,575
+    events. A gate that re-ran the cascade over all 1,575 was comparing a
+    different input against a different input — 99 matches against the
+    pipeline's 95 — and reported MISMATCH on every run since ledger scoping
+    was introduced, whether or not anything was actually non-deterministic.
+    Replaying the entrypoint the pipeline itself uses is what makes the answer
+    mean something, and leaves no filtering rule for the gate to fall behind.
     """
-    issue_id = deterministic_factory(seed=7, epoch_ms=_EPOCH_MS)
-    again = run_cascade(
+    replay = run_pipeline(
         report.corpus.events,
         cfg=cfg,
+        rules=report.rules,
         run_id=_RUN_ID,
         tenant_id=_TENANT_ID,
-        issue_id=issue_id,
+        issue_id=deterministic_factory(seed=7, epoch_ms=_EPOCH_MS),
         created_at=_INGESTED_AT,
-    )
+    ).cascade
     same = (
         [m.model_dump_json() for m in report.cascade.matches]
-        == [m.model_dump_json() for m in again.matches]
-        and report.cascade.unmatched_event_ids == again.unmatched_event_ids
+        == [m.model_dump_json() for m in replay.matches]
+        and report.cascade.unmatched_event_ids == replay.unmatched_event_ids
         and [(r.category, r.event_ids, r.reason) for r in report.cascade.refusals]
-        == [(r.category, r.event_ids, r.reason) for r in again.refusals]
+        == [(r.category, r.event_ids, r.reason) for r in replay.refusals]
     )
     return (
         GateResult(
