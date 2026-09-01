@@ -17,7 +17,7 @@ from api.converters import event_from_row, exception_from_row, match_from_row
 from api.deps import db_session
 from api.errors import ApiError
 from api.run_scope import event_source_run_id
-from db.models import ExceptionRow, TransactionEventRow
+from db.models import ExceptionRow, Run, TransactionEventRow
 from db.models import Match as MatchRow
 from fc.cash.bridge import CashBridge, compute_cash_bridge
 
@@ -50,12 +50,25 @@ class BooksVsBankOut(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    #: Balances, read from the statement's own closing_balance column and the
+    #: opening balance derived from its first row. Carried alongside the
+    #: movements rather than instead of them: the movements are what the
+    #: difference is computed from, the balances are what a reader recognises.
+    opening_balance_paise: int
+    books_balance_paise: int
+    bank_balance_paise: int
     books_movement_paise: int
     bank_movement_paise: int
     difference_paise: int
+    #: Signed contributions to ``difference_paise``, summing to it exactly.
+    #: A negative line means those rows pull the books below the bank — an
+    #: unbooked credit does that — so the sign is information, not an error.
     timing_paise: int
     unrecorded_in_books_paise: int
     under_investigation_paise: int
+    unidentified_inflow_paise: int
+    matched_residual_paise: int
+    #: The gateway bridge's own residual. Not one of the components above.
     unexplained_paise: int
 
 
@@ -145,12 +158,17 @@ def _bridge_out(run_id: str, bridge: CashBridge) -> CashBridgeOut:
             exception_ids=list(bridge.at_risk.exception_ids),
         ),
         books_vs_bank=BooksVsBankOut(
+            opening_balance_paise=bridge.books_vs_bank.opening_balance_paise,
+            books_balance_paise=bridge.books_vs_bank.books_balance_paise,
+            bank_balance_paise=bridge.books_vs_bank.bank_balance_paise,
             books_movement_paise=bridge.books_vs_bank.books_movement_paise,
             bank_movement_paise=bridge.books_vs_bank.bank_movement_paise,
             difference_paise=bridge.books_vs_bank.difference_paise,
             timing_paise=bridge.books_vs_bank.timing_paise,
             unrecorded_in_books_paise=bridge.books_vs_bank.unrecorded_in_books_paise,
             under_investigation_paise=bridge.books_vs_bank.under_investigation_paise,
+            unidentified_inflow_paise=bridge.books_vs_bank.unidentified_inflow_paise,
+            matched_residual_paise=bridge.books_vs_bank.matched_residual_paise,
             unexplained_paise=bridge.books_vs_bank.unexplained_paise,
         ),
         lanes=[
@@ -184,10 +202,19 @@ async def _compute(session: AsyncSession, run_id: str) -> CashBridge:
         await session.scalars(select(ExceptionRow).where(ExceptionRow.run_id == run_id))
     ).all()
     matches = (await session.scalars(select(MatchRow).where(MatchRow.run_id == run_id))).all()
+    # `as_of` is what makes "a live dispute window" answerable. Without it the
+    # bridge cannot tell an open window from one that shut months ago, assumes
+    # open, and counts contested money as still at risk — three items and
+    # ₹1,03,755.52 on the second corpus where the truth is one and ₹33,262.02.
+    # The run's own start date, not today's, so the figure is stable and a
+    # replay of an old run reports what was true then.
+    run = await session.get(Run, run_id)
+    as_of = run.started_at.date() if run is not None else None
     return compute_cash_bridge(
         [event_from_row(e) for e in events],
         [exception_from_row(x) for x in exceptions],
         [match_from_row(m) for m in matches],
+        as_of=as_of,
     )
 
 

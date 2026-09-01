@@ -76,6 +76,16 @@ export function BooksVsBank({ runId }: { runId: string }) {
       paise: b.under_investigation_paise,
       note: "still being worked out",
     },
+    {
+      label: "Unidentified inflows",
+      paise: b.unidentified_inflow_paise,
+      note: "arrived, unattributed",
+    },
+    {
+      label: "Reconciled",
+      paise: b.matched_residual_paise,
+      note: "rounding inside matched groups",
+    },
   ];
 
   const deadline = risk.earliest_deadline;
@@ -93,14 +103,27 @@ export function BooksVsBank({ runId }: { runId: string }) {
           <h2 className="text-sm font-semibold">Books vs bank</h2>
         </div>
 
+        <div className="text-text-muted mb-1 text-[11px]">
+          Opening balance {formatPaiseWhole(b.opening_balance_paise)}
+        </div>
         <div className="mb-4 flex items-end gap-8">
-          <Figure label="Per the books" paise={b.books_movement_paise} />
-          <Figure label="Per the bank" paise={b.bank_movement_paise} />
+          {/*
+            Balances, not movements. The engine reads the statement's own
+            closing_balance column and derives the opening balance from the
+            first row; rendering *_movement_paise here showed the period's net
+            change instead, so a statement closing at ₹9,19,977.27 displayed as
+            -₹7,34,610 — the fix was in the bridge and this component never
+            switched to it.
+          */}
+          <Figure label="Per the books" paise={b.books_balance_paise} />
+          <Figure label="Per the bank" paise={b.bank_balance_paise} />
           <Figure label="Difference" paise={b.difference_paise} emphasis />
         </div>
 
         <div className="text-text-muted border-border border-t pt-3 text-[11px]">
-          Still open, by what to do about it
+          What makes up the difference — signed, so these sum to it exactly. A
+          negative line pushes the books below the bank: an unbooked credit
+          does that, an unbooked debit does the opposite.
         </div>
         <ul className="mt-1.5 flex flex-col gap-1.5">
           {composition.map((row) => (

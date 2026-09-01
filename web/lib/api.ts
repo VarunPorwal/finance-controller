@@ -1670,6 +1670,12 @@ export interface components {
          *     than absorbed. This is the headline an accountant reads first.
          */
         BooksVsBankOut: {
+            /** Opening Balance Paise */
+            opening_balance_paise: number;
+            /** Books Balance Paise */
+            books_balance_paise: number;
+            /** Bank Balance Paise */
+            bank_balance_paise: number;
             /** Books Movement Paise */
             books_movement_paise: number;
             /** Bank Movement Paise */
@@ -1682,6 +1688,10 @@ export interface components {
             unrecorded_in_books_paise: number;
             /** Under Investigation Paise */
             under_investigation_paise: number;
+            /** Unidentified Inflow Paise */
+            unidentified_inflow_paise: number;
+            /** Matched Residual Paise */
+            matched_residual_paise: number;
             /** Unexplained Paise */
             unexplained_paise: number;
         };
