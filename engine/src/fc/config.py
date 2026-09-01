@@ -48,6 +48,12 @@ class Config(BaseModel):
     gemini_context_cache_ttl: int = 3600
 
     # Reconciliation config
+    #: Comma-separated exact ledger_name values that identify a bank account
+    #: in the tenant's Tally chart of accounts. A daybook row's ledger only
+    #: moves the bank when this matches exactly — "Bank Charges" containing
+    #: the substring "Bank" is exactly the false-positive a substring match
+    #: would invite, so this is exact-match only, never contains().
+    bank_ledger_names: str = "HDFC Bank 4471"
     auto_threshold: Decimal = Field(default=Decimal("0.94"), ge=Decimal(0), le=Decimal(1))
     tolerance_abs_paise: int = 100
     tolerance_pct: Decimal = Decimal("0.0005")
@@ -98,6 +104,10 @@ class Config(BaseModel):
     def offline(self) -> bool:
         """True when no LLM call may leave the process (``make demo-local``)."""
         return self.llm_mode in ("cache_only", "off")
+
+    @property
+    def bank_ledger_name_set(self) -> frozenset[str]:
+        return frozenset(name.strip() for name in self.bank_ledger_names.split(",") if name.strip())
 
 
 def load_config(*, env_file: str | None = ".env", environ: dict[str, str] | None = None) -> Config:

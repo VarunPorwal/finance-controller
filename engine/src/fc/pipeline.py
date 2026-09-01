@@ -65,11 +65,23 @@ PIPELINE_STAGES: Final[tuple[str, ...]] = (
 #: here too: change both sides in the same commit).
 _SETTLEMENT_RECEIPT_REF = re.compile(r"Settlement credit (\S+)")
 
-#: PRD §4.1.6's 7 voucher types, minus the 5 that never touch the bank
-#: ledger. Sales, Journal, Credit Note, Debit Note and Contra are the contra
-#: side of double entry — they cannot match a bank line and are excluded
-#: from matching (not deleted; see `run_pipeline`).
-_BANK_MOVEMENT_VOUCHER_TYPES = frozenset({"Receipt", "Payment"})
+def _touches_bank_ledger(event: TransactionEvent, bank_ledgers: frozenset[str]) -> bool:
+    """Whether a ledger row's voucher has a leg on the bank account itself.
+
+    Scoped by *ledger name*, not voucher_type: on this data a Sales, Journal
+    or Credit Note voucher never carries the bank ledger on either side, so
+    it never moves the bank account and can never have a bank-statement
+    counterpart — that is what makes it safe to exclude. Voucher_type would
+    get the same answer here (Tally's day book puts every bank-touching row
+    on a Receipt or Payment in this dataset) but would silently miss two
+    real-world cases a voucher_type-only filter has no way to see: a Contra
+    between two bank accounts, and a bank charge booked directly through a
+    Journal with the bank ledger on one leg. ``ledger_account`` is the
+    primary leg (Tally's ``ledger_name``) and ``counterparty`` is the party
+    leg (``party_ledger_name``) — a Contra can carry the bank ledger on
+    either one, so both are checked.
+    """
+    return event.ledger_account in bank_ledgers or event.counterparty in bank_ledgers
 
 #: Same marker ``fc.cash.bridge`` matches in a settlement-line-item
 #: adjustment row's ``description`` (PRD §4.1.7). Duplicated rather than
@@ -149,14 +161,19 @@ def run_pipeline(
     clock, so a seeded run is byte-identical (CLAUDE.md hard rule 9).
     """
     events = tuple(events)
-    # Only Receipt and Payment vouchers move the bank account; Sales, Journal,
-    # Credit Note, Debit Note and Contra are the contra side of double entry
-    # and can never match a bank line. Feeding those to the cascade made every
-    # one of them a false "missing in bank"/"missing in gateway" exception.
-    # They stay in `events` (and therefore in `by_id` below and in the
-    # persisted corpus) so anything explaining a decision can still look them
-    # up — they are excluded from matching, not deleted.
-    reconcilable = tuple(e for e in events if e.source != "ledger" or e.voucher_type in _BANK_MOVEMENT_VOUCHER_TYPES)
+    # A ledger row only ever has a bank counterpart if its voucher actually
+    # touches the bank ledger; one that never does (a Sales invoice booked
+    # against a debtor, a fee Journal against Bank Charges/GST Input/TDS
+    # Receivable, a Credit Note against a debtor) can never match a bank
+    # line, and feeding it to the cascade made every one of them a false
+    # "missing in bank"/"missing in gateway" exception. They stay in
+    # `events` (and therefore in `by_id` below and in the persisted corpus)
+    # so anything explaining a decision can still look them up — excluded
+    # from matching, not deleted.
+    bank_ledgers = cfg.bank_ledger_name_set
+    reconcilable = tuple(
+        e for e in events if e.source != "ledger" or _touches_bank_ledger(e, bank_ledgers)
+    )
     cascade = run_cascade(
         reconcilable,
         cfg=cfg,
