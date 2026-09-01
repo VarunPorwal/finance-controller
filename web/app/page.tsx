@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Download, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
+import { RefreshCw, Download, Upload, ClipboardList, CircleCheck, TriangleAlert, Clock } from "lucide-react";
 import { useRun } from "@/lib/run-context";
 import { apiClient, type components } from "@/lib/client";
 import { formatPercent } from "@/lib/format";
@@ -67,9 +68,28 @@ export async function fetchHomeBundle(runId: string): Promise<HomeBundle> {
 }
 
 export default function ReconcileHome() {
-  const { summary, loading, error } = useRun();
+  const { summary, loading, error, refresh } = useRun();
   const router = useRouter();
   const runId = summary?.run.run_id;
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
+
+  async function runReconciliation() {
+    setReconciling(true);
+    setReconcileError(null);
+    try {
+      const { error } = await apiClient.POST("/api/v1/runs", { body: { mode: "demo", seed: 7 } });
+      if (error) {
+        setReconcileError("Could not start reconciliation.");
+        return;
+      }
+      refresh();
+    } catch {
+      setReconcileError("Could not reach the API.");
+    } finally {
+      setReconciling(false);
+    }
+  }
 
   const { data: home } = useQuery({
     queryKey: queryKeys.homeHistory(runId),
@@ -128,13 +148,23 @@ export default function ReconcileHome() {
           <button
             type="button"
             onClick={() => router.push("/sources")}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white"
+            className="flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-[12.5px] font-medium text-text-heading"
+          >
+            <Upload width={15} height={15} />
+            Ingest
+          </button>
+          <button
+            type="button"
+            disabled={reconciling}
+            onClick={runReconciliation}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12.5px] font-semibold text-white disabled:opacity-50"
           >
             <RefreshCw width={15} height={15} />
-            Ingest
+            {reconciling ? "Reconciling…" : "Run reconciliation"}
           </button>
         </div>
       </div>
+      {reconcileError && <p className="mb-3 text-xs text-amber-text">{reconcileError}</p>}
 
       <div className="mb-5 grid grid-cols-4 gap-5">
         {kpis.map((k) => (
