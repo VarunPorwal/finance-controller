@@ -206,7 +206,8 @@ async def get_default_run(
     session: AsyncSession = Depends(db_session),
     user: AuthenticatedUser = Depends(current_user),
 ) -> RunOut:
-    """The run the app opens on: always the newest original, complete run.
+    """The run the app opens on: always the newest complete run, replays
+    included.
 
     Declared before ``/{run_id}`` so FastAPI matches the literal path first.
 
@@ -216,13 +217,21 @@ async def get_default_run(
     seeded once during setup stuck a tenant on one run forever with no way
     to point it anywhere else — every later reconciliation completed
     correctly but never showed up here. "Always newest" is the behavior
-    every other screen already assumes (the trend chart on Reconcile pulls
-    the full run list unfiltered), so this just makes the default consistent
-    with that instead of independently stale.
+    every other screen already assumes.
+
+    Originally scoped to ``parent_run_id.is_(None)`` (original runs only),
+    which meant "Run reconciliation" on the Reconcile screen — a replay of
+    the current run's own events under whatever ruleset is active now —
+    completed successfully but never appeared here: a replay's whole point
+    is to become the current view after a rule change, and excluding it
+    made the button look like it did nothing. The trend chart and run list
+    stay ``kind=original`` on purpose (a what-if history isn't the
+    reconciliation history), but "what am I looking at right now" has no
+    reason to prefer a stale original over a replay that superseded it.
     """
     row = await session.scalar(
         select(Run)
-        .where(Run.parent_run_id.is_(None), Run.status == "complete")
+        .where(Run.status == "complete")
         .order_by(Run.started_at.desc(), Run.run_id.desc())
         .limit(1)
     )

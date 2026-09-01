@@ -78,7 +78,16 @@ export default function ReconcileHome() {
     setReconciling(true);
     setReconcileError(null);
     try {
-      const { error } = await apiClient.POST("/api/v1/runs", { body: { mode: "demo", seed: 7 } });
+      // Re-runs the current run's own already-ingested events under whatever
+      // ruleset is active right now — the point being to pick up a rule
+      // change without re-uploading anything. Only falls back to the demo
+      // corpus when there is nothing yet to replay.
+      const { error } = runId
+        ? await apiClient.POST("/api/v1/runs/{run_id}/replay", {
+            params: { path: { run_id: runId } },
+            body: { reason: "Re-run from Reconcile" },
+          })
+        : await apiClient.POST("/api/v1/runs", { body: { mode: "demo", seed: 7 } });
       if (error) {
         setReconcileError("Could not start reconciliation.");
         return;
