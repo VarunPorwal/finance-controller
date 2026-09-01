@@ -267,12 +267,13 @@ async def import_rules(
     written: a bad entry at position 12 of 20 fails the whole import rather
     than leaving 11 rules created and 9 silently skipped.
 
-    Every entry lands as ``status="draft"`` with ``origin="imported"``
-    regardless of what the file says (a rule is never born active — §8.8,
-    same invariant ``POST /rules`` enforces) and never overwrites an
-    existing ``rule_id``: one already present in this tenant gets the next
-    version instead, through the same ladder ``/versions`` uses. A file can
-    be re-uploaded to add versions without disturbing what is already there.
+    Every entry lands active immediately, origin="imported": uploading a
+    rulebook replaces what is live rather than staging drafts next to it.
+    Every rule the tenant had active going in is retired first — stopped
+    outright, not just window-closed — so the import is a clean swap, not
+    an overlay. Skips the reason-per-activation prompt the single-rule
+    ``/activate`` endpoint requires, since an import is one human decision
+    covering the whole file, not one per rule.
     """
     now = datetime.now(UTC)
     try:
@@ -281,10 +282,32 @@ async def import_rules(
             source_label="upload",
             tenant_id=user.tenant_id,
             created_at=now,
-            default_status="draft",
+            default_status="active",
         )
     except RuleSourceError as exc:
         raise ApiError(422, "invalid rules file", str(exc)) from exc
+
+    previously_active = (
+        await session.scalars(
+            select(RuleRow).where(RuleRow.tenant_id == user.tenant_id, RuleRow.status == "active")
+        )
+    ).all()
+    retired_ids = [f"{r.rule_id}:{r.version}" for r in previously_active]
+    for prior in previously_active:
+        prior.status = "retired"
+        prior.effective_to = now.date()
+    if previously_active:
+        await session.flush()
+        await append_audit(
+            session,
+            tenant_id=user.tenant_id,
+            actor=f"user:{user.user_id}",
+            action="rule.retire_for_import",
+            subject_type="rule",
+            subject_id="bulk",
+            payload={"retired": retired_ids, "dry_run": dry_run},
+            created_at=now,
+        )
 
     results: list[RuleImportEntryOut] = []
     for index, rule in enumerate(parsed):
@@ -309,10 +332,12 @@ async def import_rules(
             effective_confidence=rule.effective_confidence,
             effective_from=rule.effective_from,
             effective_to=rule.effective_to,
-            status="draft",
+            status="active",
             origin="imported",
             created_by=user.user_id,
             created_at=now,
+            activated_by=user.user_id,
+            activated_at=now,
         )
         session.add(row)
         await session.flush()
@@ -325,6 +350,7 @@ async def import_rules(
             subject_id=f"{rule.rule_id}:{version}",
             payload={"version_hash": rule.version_hash, "dry_run": dry_run},
             created_at=now,
+            ruleset_hash=rule.version_hash,
         )
         results.append(
             RuleImportEntryOut(

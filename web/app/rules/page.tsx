@@ -47,9 +47,32 @@ export default function RuleBookPage() {
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [actingId, setActingId] = useState<string | null>(null);
 
   function reload() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.rules({}) });
+  }
+
+  async function activateInline(rule: Rule) {
+    const key = `${rule.rule_id}:${rule.version}`;
+    setActingId(key);
+    await apiClient.POST("/api/v1/rules/{rule_id}/activate", {
+      params: { path: { rule_id: rule.rule_id }, query: { version: rule.version } },
+      body: { reason: "Activated from Rule Book" },
+    });
+    setActingId(null);
+    reload();
+  }
+
+  async function deleteInline(rule: Rule) {
+    if (!window.confirm(`Delete draft ${rule.rule_id} v${rule.version}?`)) return;
+    const key = `${rule.rule_id}:${rule.version}`;
+    setActingId(key);
+    await apiClient.DELETE("/api/v1/rules/{rule_id}/versions/{version}", {
+      params: { path: { rule_id: rule.rule_id, version: rule.version } },
+    });
+    setActingId(null);
+    reload();
   }
 
   async function importRulesFile(file: File) {
@@ -194,37 +217,10 @@ export default function RuleBookPage() {
       <FilterPills options={FILTERS} active={status} onChange={setStatus} />
 
       <div className="grid grid-cols-2 gap-5">
-        {suggestions.map((s) => (
-          <div
-            key={s.signature}
-            className="cursor-pointer rounded-[var(--radius-card)] border border-model-border p-5"
-            style={{ background: "var(--model-bg)" }}
-            onClick={() => router.push(`/rules/${s.rule.rule_id}`)}
-          >
-            <div className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-model-text">
-              <Sparkle width={12} height={12} />
-              LEARNED SUGGESTION
-            </div>
-            <div className="text-[15px] font-semibold">{s.rule.name}</div>
-            <div className="mt-1 text-xs text-text-muted">
-              {humanizeSnakeCase(s.resolution_category)}
-            </div>
-            <div className="mt-3.5 flex items-center gap-2.5">
-              <StatusPill tone="model">Draft only</StatusPill>
-              <span className="text-[11.5px] text-text-muted">Seen {s.occurrences} times</span>
-            </div>
-            <div className="mt-2.5 text-[11.5px] text-model-text">
-              Suggested rules never activate on their own
-            </div>
-            <div className="mt-2.5 flex items-center justify-between border-t border-model-border pt-3">
-              <span className="text-xs text-text-muted">{s.exception_ids.length} historical exceptions</span>
-              <span className="text-[12.5px] font-semibold text-primary">View rule →</span>
-            </div>
-          </div>
-        ))}
-
         {filtered.map((rule) => {
           const bt = affected[rule.rule_id];
+          const key = `${rule.rule_id}:${rule.version}`;
+          const busy = actingId === key;
           return (
             <div
               key={rule.rule_id}
@@ -259,6 +255,26 @@ export default function RuleBookPage() {
                     Effective {rule.effective_from}
                   </span>
                 </div>
+                {rule.status === "draft" && (
+                  <div className="mb-2.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => activateInline(rule)}
+                      className="rounded-[6px] bg-success-bg px-2.5 py-1 text-[11px] font-semibold text-success disabled:opacity-50"
+                    >
+                      {busy ? "…" : "Activate"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => deleteInline(rule)}
+                      className="rounded-[6px] bg-error-bg px-2.5 py-1 text-[11px] font-semibold text-error disabled:opacity-50"
+                    >
+                      {busy ? "…" : "Delete"}
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-center justify-between border-t border-[color:var(--neutral-bg)] pt-3">
                   <span className="text-xs text-text-muted">
                     {bt ? `${bt.would_explain.count} transactions affected` : "…"}
@@ -269,6 +285,35 @@ export default function RuleBookPage() {
             </div>
           );
         })}
+
+        {suggestions.map((s) => (
+          <div
+            key={s.signature}
+            className="cursor-pointer rounded-[var(--radius-card)] border border-model-border p-5"
+            style={{ background: "var(--model-bg)" }}
+            onClick={() => router.push(`/rules/${s.rule.rule_id}`)}
+          >
+            <div className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-model-text">
+              <Sparkle width={12} height={12} />
+              LEARNED SUGGESTION
+            </div>
+            <div className="text-[15px] font-semibold">{s.rule.name}</div>
+            <div className="mt-1 text-xs text-text-muted">
+              {humanizeSnakeCase(s.resolution_category)}
+            </div>
+            <div className="mt-3.5 flex items-center gap-2.5">
+              <StatusPill tone="model">Draft only</StatusPill>
+              <span className="text-[11.5px] text-text-muted">Seen {s.occurrences} times</span>
+            </div>
+            <div className="mt-2.5 text-[11.5px] text-model-text">
+              Suggested rules never activate on their own
+            </div>
+            <div className="mt-2.5 flex items-center justify-between border-t border-model-border pt-3">
+              <span className="text-xs text-text-muted">{s.exception_ids.length} historical exceptions</span>
+              <span className="text-[12.5px] font-semibold text-primary">View rule →</span>
+            </div>
+          </div>
+        ))}
       </div>
 
       {pendingBacktest && (
