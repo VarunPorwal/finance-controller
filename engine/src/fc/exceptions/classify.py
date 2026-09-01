@@ -186,7 +186,14 @@ def classify_exceptions(
         if not ids or any(event_id in covered or event_id in silenced for event_id in ids):
             continue
         if gap.outcome.may_auto_close:
-            covered.update(ids)
+            # `silenced`, not `covered`, exactly as this set's own docstring
+            # says. A rule explaining the *fee* on a payment is a conclusion
+            # about arithmetic, not evidence that the money reached the bank —
+            # and marking the row covered suppressed
+            # `_settled_without_bank_credit` for its whole settlement. On the
+            # demo corpus that hid a released ₹1,02,895.52 payout with no bank
+            # credit against it: no match, no exception, nothing on screen.
+            silenced.update(ids)
             continue
         if gap.outcome.considered == 0:
             # Fully explained, or no rule was ever scoped to this counterparty
