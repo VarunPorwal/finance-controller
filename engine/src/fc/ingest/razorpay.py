@@ -23,8 +23,10 @@ __all__ = ["RazorpayReconRow", "parse_razorpay_recon"]
 
 #: PRD §4.1.2 structural fact: ``entity_id`` carries one of these prefixes
 #: depending on row type (payment, order, refund, settlement, settlement
-#: line item, dispute).
-ENTITY_ID_PREFIXES = ("pay_", "order_", "rfnd_", "setl_", "setlod_", "dp_")
+#: line item, dispute). ``fc.generator.razorpay_gen`` emits ``dp_`` for
+#: disputes; real Razorpay recon exports use ``disp_`` instead — both are
+#: accepted so an uploaded real export isn't rejected wholesale.
+ENTITY_ID_PREFIXES = ("pay_", "order_", "rfnd_", "setl_", "setlod_", "dp_", "disp_")
 
 RazorpayType = Literal["payment", "refund", "adjustment", "dispute", "transfer"]
 RazorpayCreditType = Literal["default", "refund", "dispute"]

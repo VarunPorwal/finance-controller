@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
@@ -109,6 +110,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!entry) return;
     void queryClient.prefetchQuery(entry);
   }
+
+  // Hover-prefetch only helps once you've already landed and start moving
+  // the mouse; it does nothing for the very first thing anyone sees, and
+  // nothing at all on touch. The moment a run_id is known (right after the
+  // one unavoidable /runs/default + /summary round trip), warm every other
+  // tab's cache in the background so clicking any of them is instant instead
+  // of waiting on a fetch that hasn't started yet.
+  const warmedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runId || warmedFor.current === runId) return;
+    warmedFor.current = runId;
+    for (const href of Object.keys(PREFETCH)) {
+      const entry = PREFETCH[href]?.(runId);
+      if (entry) void queryClient.prefetchQuery(entry);
+    }
+  }, [runId, queryClient]);
 
   return (
     <div className="flex min-h-screen bg-background text-text-heading">

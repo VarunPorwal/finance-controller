@@ -215,7 +215,12 @@ def _unrecorded_chargebacks(
 
     out: list[Classified] = []
     for event in events:
-        if event.source != "razorpay" or event.txn_type != "dispute":
+        # A dispute row is a chargeback only when it debits the settlement.
+        # The same txn_type on a credit is the reversal — money already back
+        # in the merchant's favour, not a loss needing a human decision, and
+        # nothing to "record" against a ledger that never needed to know
+        # about a chargeback that got undone before it was ever booked.
+        if event.source != "razorpay" or event.txn_type != "dispute" or event.direction != "debit":
             continue
         if event.order_id and event.order_id in booked_order_ids:
             continue

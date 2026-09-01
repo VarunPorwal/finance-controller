@@ -178,15 +178,23 @@ def compute_cash_bridge(
             reserve_hold_ids.append(event.event_id)
 
     refund_paise, refund_ids = 0, []
+    # Signed, not a magnitude: a dispute debit is a chargeback (subtracts from
+    # net) and a dispute credit is its reversal (the money comes back, so it
+    # must add back). Both are txn_type == "dispute" — direction is what tells
+    # them apart. Filtering the whole loop to direction == "debit" (as this
+    # used to) silently dropped every reversal from the bridge: not double
+    # counted, just invisible, which is how a batch that nets out correctly
+    # in the bank still showed a phantom gap of exactly one reversal.
     chargeback_paise, chargeback_ids = 0, []
     for event in events:
-        if event.source != "razorpay" or event.direction != "debit":
+        if event.source != "razorpay":
             continue
-        if event.txn_type == "refund":
+        if event.txn_type == "refund" and event.direction == "debit":
             refund_paise += abs(event.amount_paise)
             refund_ids.append(event.event_id)
         elif event.txn_type == "dispute":
-            chargeback_paise += abs(event.amount_paise)
+            sign = 1 if event.direction == "debit" else -1
+            chargeback_paise += sign * abs(event.amount_paise)
             chargeback_ids.append(event.event_id)
 
     actual_bank_paise = 0
