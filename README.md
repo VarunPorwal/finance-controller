@@ -1,51 +1,136 @@
 <div align="center">
 
-# 💰 AI Finance Controller
+# Finco
 
-**Automatic reconciliation of Razorpay settlements, Indian bank statements and Tally ledgers.**
+**AI Finance Controller for Razorpay settlements, Indian bank statements and Tally ledgers.**
 
 Matches what it can prove. Refuses what it cannot. Hands you a short, ranked list of the rest, with evidence.
 
-`Python 3.12` · `FastAPI` · `Postgres 16` · `Next.js 15` · `Gemini + Groq`
+[![CI](https://github.com/VarunPorwal/finance-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunPorwal/finance-controller/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![Postgres](https://img.shields.io/badge/Postgres-16-4169E1?logo=postgresql&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 
 </div>
 
 ---
 
-## Table of contents
+## What it does
 
-1. [The problem](#-the-problem)
-2. [Quick start](#-quick-start)
-3. [Results](#-results)
-4. [Architecture](#-architecture)
-5. [How a run works](#-how-a-run-works)
-6. [The matching cascade](#-the-matching-cascade)
-7. [Where AI is used, and where it is not](#-where-ai-is-used-and-where-it-is-not)
-8. [Safety and correctness](#-safety-and-correctness)
-9. [Screens](#-screens)
-10. [Known limits](#-known-limits)
-11. [Project structure](#-project-structure)
-12. [Commands](#-commands)
+A single bank credit of Rs 4,82,000 hides 14 Razorpay payments, 2 refunds, MDR, GST on MDR, TDS and a rolling reserve. The Tally daybook has one receipt voucher for all of it. The bank cut the narration at 100 characters and lost the reference. Someone spends three days a month making these agree.
 
----
+Finco does that automatically:
 
-## 🎯 The problem
+- **Matches** gateway, bank and ledger records in five passes, strictest first, with the evidence recorded on every match.
+- **Explains** the gaps that arithmetic cannot close with a versioned, effective-dated rule book.
+- **Escalates** everything else as a ranked queue of decisions, each with the consequence of ignoring it and a recommended action.
+- **Reports** the cash position (at risk, held in reserve, claimable as GST input credit) and emails you the summary when a run completes.
 
-A single NEFT credit of ₹4,82,000 lands in your bank account. Behind it sit 14
-Razorpay payments, 2 refunds, an MDR charge, GST on that MDR, TDS under 194-O
-and a rolling reserve deduction. Your Tally daybook has one receipt voucher for
-the whole thing. The bank narration was cut at 100 characters and lost the UTR.
+## Results
 
-Nothing lines up. A person spends three days a month making it line up.
+One run over 1,575 events with 21 injected failure modes, scored against the answer key.
 
-This project does that lining-up automatically. It proves matches with
-references and arithmetic, explains gaps with a versioned rulebook, and turns
-what is left into a queue of decisions only a human can make. Every decision it
-takes carries the evidence for it. Every decision it refuses says why.
+| Metric | Value |
+|---|---|
+| Runtime | 0.25 s |
+| Auto-matched | 700 events (44%) |
+| Rule-resolved | 437 events (28%) |
+| Precision on auto-close | **100%**, 0 wrong closes |
+| Recall against ground truth | **98.4%** |
+| Human queue | **20 items**, not 1,575 |
 
----
+Four gates block a release and all four pass: `false_auto_resolutions == 0`, `never_auto_after_pipeline == 0`, recall at or above 90%, and byte-identical output for the same seed. Reproduce it with no database, no network and no API keys:
 
-## ⚡ Quick start
+```bash
+./scripts/dev.ps1 eval
+```
+
+## Architecture
+
+Four layers, dependencies point down only. The engine is pure Python with no database, network or clock inside it, which is what makes the boundary mechanical: its only dependencies are `pydantic` and `python-dotenv`, and an import scan in CI fails the build if that changes.
+
+```mermaid
+flowchart TB
+    subgraph WEB["web/  Next.js 15, React 19"]
+        UI[Dashboard]
+        CLIENT[Typed client generated from the API schema]
+    end
+    subgraph API["api/  FastAPI"]
+        R[15 routers, 78 endpoints]
+        RLS[Tenant scope per transaction]
+        DRY[dry_run on every write]
+    end
+    subgraph ENGINE["engine/  pure domain logic"]
+        ING[ingest]
+        MATCH[matching]
+        RULES[rules]
+        EXC[exceptions]
+        CASH[cash]
+        AUDIT[audit]
+        AGENT[agent]
+        LLM[llm]
+    end
+    subgraph DB["db/  Postgres 16"]
+        T[13 tables]
+        SEC[Row-level security, forced]
+        TRIG[Immutable rules trigger]
+        APP[Append-only audit chain]
+    end
+    WEB --> API --> ENGINE --> DB
+```
+
+### How a run works
+
+```mermaid
+flowchart LR
+    RZ[Razorpay JSON] --> I
+    BK[Bank CSV or PDF] --> I
+    TL[Tally CSV or XML] --> I
+    I[1 Ingest and normalise] --> B[2 Block<br/>332,520 pairs to 6,170]
+    B --> M[3 Match<br/>five stages]
+    M --> W[4 Three-way<br/>gateway + bank + ledger]
+    W --> RB[5 Rule book<br/>versioned deductions]
+    RB --> C[6 Classify, cluster, rank<br/>48 exceptions to 20 decisions]
+    C --> CB[7 Cash bridge<br/>gross to bank credited]
+    CB --> Q[Decision queue]
+    CB --> E[Email summary]
+```
+
+### The five matching stages
+
+Each stage is cheaper and more certain than the one after it. A row matched at one stage never reaches the next.
+
+| Stage | Matches on | Can auto-close |
+|---|---|---|
+| 1 Exact reference | UTR, RRN or settlement id agree exactly and are not truncated | yes |
+| 2 Fee-adjusted | `gross - fees = net`, checked per settlement | yes |
+| 3 Date shift | same amount, 1 to 3 days apart, reference has a unique completion | yes |
+| 4 Many-to-one | one bank credit against the gateway rows that sum to it | grouped path only |
+| 5 Fuzzy | weighted resemblance, capped at 0.75 | never |
+
+Five categories escalate no matter how confident the match looks: unrecorded chargebacks, duplicate ledger entries, ambiguous candidates, NACH batch lines and unknowns. When two answers are equally valid the engine emits neither and asks.
+
+### Where the AI sits
+
+```mermaid
+flowchart LR
+    subgraph DECIDES["Decides. No model can import these."]
+        M[matching] --> R[rules] --> T[tiering] --> C[cash bridge]
+    end
+    subgraph PROPOSES["Proposes. Every output checked by deterministic code."]
+        P[PDF extraction] -->|balance continuity| V1[accept or reject]
+        S[Question to SQL] -->|parser guard, read-only txn, RLS| V2[run or refuse]
+        N[Narration] -->|every number traced to a query| V3[use or template]
+        CMD[Command] -->|validator, 7 push-back rules| V4[preview, human confirms]
+        D[Rule draft] -->|back-test| V5[human approves]
+    end
+    PROPOSES -. never a decision .-> DECIDES
+```
+
+Every model call falls back to a working non-AI answer. With every provider down, reconciliation still runs and every number still computes.
+
+## Quick start
 
 Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 20+, Postgres 16 with `pgvector`.
 
@@ -55,16 +140,10 @@ cp .env.example .env
 ./scripts/dev.ps1 migrate
 ```
 
-Seed 500 orders of synthetic data and reconcile them end to end:
+Seed 500 orders and reconcile them:
 
 ```bash
 ./scripts/dev.ps1 demo
-```
-
-Or run the accuracy suite. It needs no database, no network and no API keys:
-
-```bash
-./scripts/dev.ps1 eval
 ```
 
 Start the API and the dashboard:
@@ -77,358 +156,77 @@ Start the API and the dashboard:
 ./scripts/dev.ps1 web
 ```
 
----
+## Screens
 
-## 📊 Results
-
-One run over 1,575 events from three sources, with 21 injected failure modes.
-
-| Metric | Value |
+| Screen | Question it answers |
 |---|---|
-| Runtime | **0.25 s** |
-| Auto-matched | 700 events (44%) |
-| Rule-resolved | 437 events (28%) |
-| Exceptions raised | 48, collapsed into **11 root causes** |
-| Precision on auto-close | **100.00%** (3,652 correct, 0 wrong) |
-| Recall against ground truth | **98.39%** |
-| Abstention rate | 2.29% (by design) |
-| Human queue | **20 items, not 1,575** |
-| Cash at risk surfaced | ₹1,02,271 |
-| GST input credit found | ₹8,088 |
+| Overview | Is my money under control? |
+| Run | Did it read my evidence correctly? |
+| Decisions | Where is my money unexplained? |
+| Settlements | What did each settlement actually do? |
+| Reconcile | Do bank and books agree, line by line? |
+| Cash | Where is my money, and will I have enough? |
+| Rule Book | Why was this amount calculated this way? |
+| Controller Activity | What did the engine do, and would it do it again? |
+| Audit Trail | Can I prove what happened? |
+| Evaluation | How accurate is it, measured? |
+| Records | Show me the underlying evidence. |
+| Guide | What is this, and how do I use it? |
 
-Four gates block a release. All four pass on the committed run:
+The assistant in the top bar answers plain-English questions from the data and shows the SQL it ran.
 
-```
-[PASS] false_auto_resolutions      0          (needs 0)
-[PASS] never_auto_after_pipeline   0          (needs 0)
-[PASS] recall                      98.39%     (needs >= 90%)
-[PASS] determinism                 identical  (same seed, same output)
-```
+## Email reports
 
-The eval command exits non-zero when any gate fails, so it can block a merge.
+When a run completes, the summary lands in your inbox without being asked: what matched, what a rule explained, how many decisions are waiting, and the cash at risk. Escalations, deadline reminders, rule suggestions and a daily digest arrive the same way. Sending is fire-and-forget, so a mail provider outage never blocks a run.
 
----
+<p align="center">
+  <img src="docs/images/run-summary-email.png" alt="Run summary email" width="720">
+</p>
 
-## 🏗️ Architecture
+## Safety and correctness
 
-### Layers
-
-Four layers. Dependencies point down only. The engine is pure: no database, no
-network, no wall clock. Its entire dependency list is `pydantic` and
-`python-dotenv`, which is what makes the boundary mechanical rather than a
-convention.
-
-```
-+------------------------------------------------------------------+
-|  web/          Next.js 15, React 19, TanStack Query               |
-|                Calls a TypeScript client generated from the API.  |
-|                A change to a Pydantic model breaks the frontend   |
-|                build at the exact call site.                      |
-+-------------------------------+----------------------------------+
-                                |  78 endpoints, 15 routers, /api/v1
-+-------------------------------v----------------------------------+
-|  api/          FastAPI. Validate, call the engine, serialise.     |
-|                No business logic. Every write accepts dry_run.    |
-|                Tenant scope is set per transaction.               |
-+-------------------------------+----------------------------------+
-                                |
-+-------------------------------v----------------------------------+
-|  engine/       Pure domain logic. Data and config in, data out.   |
-|                                                                   |
-|   ingest/   matching/   rules/   exceptions/   cash/   audit/     |
-|   agent/    llm/        eval/    generator/                       |
-+-------------------------------+----------------------------------+
-                                |
-+-------------------------------v----------------------------------+
-|  db/           SQLAlchemy 2.0 async, Alembic, Postgres 16         |
-|                13 tables. Row-level security on every tenant      |
-|                table. Two rules code cannot enforce live here:    |
-|                  * a trigger rejects edits to an active rule      |
-|                  * UPDATE and DELETE are revoked on audit_events  |
-+------------------------------------------------------------------+
-```
-
-### Where the AI sits
-
-The language model is one module among ten inside the engine. The four modules
-that decide whether money is reconciled cannot import it. A build check scans
-the import graph and fails if they try.
-
-```
-                       +-----------------------------+
-                       |          engine/llm         |
-                       |  router, SQL guard,         |
-                       |  grounding check,           |
-                       |  injection defence          |
-                       +--------------+--------------+
-                                      |  proposals, prose, drafts
-                                      |  (never a decision)
-                                      v
-   +----------+   +-----------+   +---------+   +--------------+   +-------+
-   |  ingest  |-->|  matching |-->|  rules  |-->|  exceptions  |-->| cash  |
-   +----------+   +-----------+   +---------+   +--------------+   +-------+
-                   no llm import   no llm import  tier: no llm      no llm import
-
-   Every LLM output is checked by deterministic code before it touches state.
-   With every model provider down, every number above still computes.
-```
-
-### Trust boundaries
-
-```
-   untrusted input                 verified by                  trusted state
-   ----------------                -----------                  -------------
-   bank narration    -> sanitise, delimit, scan     ->  TransactionEvent
-   PDF statement     -> LLM extract -> balance continuity  ->  rows, or rejected
-   user question     -> LLM SQL -> parser guard -> read-only txn -> RLS -> rows
-   user command      -> LLM parse -> validator (7 rules) -> preview -> human -> action
-   AI narration      -> every number traced to a query result, else template
-   rule draft        -> arithmetic from 3 human fixes -> back-test -> human approves
-```
-
----
-
-## 🔁 How a run works
-
-```
-   Razorpay JSON          Bank CSV / PDF          Tally CSV / XML
-   (already paise)        (narration cut at       ((-)1,24,500.00,
-                           ~100 chars)             Indian grouping)
-        |                      |                        |
-        +----------------------+------------------------+
-                               v
-   1  INGEST         parse each rail's narration, verify the running
-                     balance, normalise counterparty names, scan for
-                     injected text, reject rows with a reason
-                               v
-   2  BLOCK          332,520 possible pairs -> 6,170 candidates (21x)
-                               v
-   3  MATCH          five passes, strictest first
-                               v
-   4  THREE-WAY      gateway + bank + ledger per settlement
-                               v
-   5  RULEBOOK       versioned, effective-dated deduction rules
-                               v
-   6  CLASSIFY       category -> cluster -> tier -> priority -> action
-                     48 exceptions -> 11 root causes -> 20 queue items
-                               v
-   7  CASH BRIDGE    gross - MDR - GST - TDS - refunds - chargebacks
-                     - reserve = expected net, vs what the bank credited
-```
-
-Every line of the cash bridge carries the event ids and exception ids that make
-it up, so a figure on screen opens the rows behind it and those rows add up to
-the figure.
-
----
-
-## 🔍 The matching cascade
-
-Each stage is cheaper and more certain than the one after it. A row matched at
-one stage never reaches the next. The order is the design: collapsing five
-stages into one score would lose the reason a match was made, and the reason is
-what the evidence pack is.
-
-| # | Stage | Matches on | Precision | Can auto-close |
-|---|---|---|---|---|
-| 1 | Exact reference | UTR, RRN or settlement id agree exactly, and are not truncated | 100% | yes |
-| 2 | Fee-adjusted | `gross - fees = net`, checked over a whole settlement | 100% | yes |
-| 3 | Date shift | same amount, 1 to 3 days apart, reference has a unique completion | n/a | yes |
-| 4 | Many-to-one | one bank credit against the gateway rows that sum to it | 100% | grouped path only |
-| 5 | Fuzzy | weighted resemblance, capped at 0.75 | n/a | **never** |
-
-Stage 5 exists to rank suggestions for a person. The data model refuses to save
-a fuzzy match above 0.75, or an auto-closed group that contains one.
-
-### What it refuses to accept as evidence
-
-| Looks like proof | Why it is not |
+| Guarantee | Enforced by |
 |---|---|
-| A shared reference prefix | An RBI UTR is `bank + year + day + sequence`. One 8-character prefix covers 14 different settlements here. Stage 3 needs a unique completion. |
-| A matching `order_id` | An order id names an order, not a movement. A payment, its refund and its chargeback all quote the same one. |
-| A narration naming two ids | "Reserve release for setl_A and setl_B" identifies itself with neither. |
-| Gateway and ledger agreeing | Both are statements of what should have happened. Without a bank leg, nothing auto-closes. |
-
-### Abstention is a result
-
-When two answers are equally valid the engine emits neither. Subset-sum with
-more than one valid subset returns nothing. Five categories escalate no matter
-how confident the match looks: `chargeback_unrecorded`,
-`duplicate_ledger_entry`, `ambiguous_multi_candidate`, `nach_batch_unexploded`,
-`unknown`. That check runs first in tiering and nothing after it can override
-it.
-
----
-
-## 🤖 Where AI is used, and where it is not
-
-Ten routed tasks across Gemini and Groq, with round-robin inside a tier and a
-ladder between tiers. Every route ends in a working non-AI answer.
-
-| Task | Fallback when every model fails | Verified afterwards by |
-|---|---|---|
-| Bank PDF extraction | manual CSV upload | running-balance continuity |
-| Question to SQL | a refusal | parser guard, read-only transaction, row-level security |
-| Explaining a result | a template | every number must trace to a query result |
-| Natural-language command | a form | a validator with 7 push-back rules, then human confirm |
-| Drafting a rule | defer to human | back-test, then explicit approval |
-| Cluster label | a template | cosmetic only; a deterministic key decides membership |
-
-Deliberately not AI:
-
-- deciding whether two records match
-- deciding whether an exception can auto-close
-- which cluster an exception belongs to
-- learning a fee rule from repeated human fixes (derived arithmetically so the
-  result is reproducible offline)
-
-A rule draft never activates itself. Not at three matching fixes, not at thirty.
-
----
-
-## 🛡️ Safety and correctness
-
-| Guarantee | How it is enforced |
-|---|---|
-| Money is integer paise, never float | AST scan over every money module; a float literal fails the build |
-| YAML rates stay exact | `rate: 0.9` is parsed from the scalar's own text into `Decimal`, never through a float |
-| Tenants cannot see each other | Postgres row-level security, forced, on a role with no bypass right |
-| Generated SQL cannot write or leak | parser guard, `SET TRANSACTION READ ONLY`, RLS; each layer is sufficient alone |
-| Rules are immutable once active | a database trigger rejects the edit; changes create version N+1 |
-| The audit trail cannot be rewritten | `UPDATE` and `DELETE` revoked; SHA-256 hash chain, verifiable end to end |
-| Same input, identical output | the pipeline re-runs inside the eval suite and both results are compared byte for byte |
+| Money is integer paise, never float | AST scan over every money module |
+| Tenants cannot see each other's data | Postgres row-level security, forced, on a role with no bypass |
+| Generated SQL cannot write or leak | parser guard, read-only transaction, RLS; each layer sufficient alone |
+| Rules are immutable once active | database trigger; changes create version N+1 |
+| The audit trail cannot be rewritten | UPDATE and DELETE revoked; SHA-256 hash chain |
+| Same input, identical output | the pipeline re-runs inside the eval suite and results are compared |
 | Nothing writes without a preview | every write endpoint accepts `dry_run` |
-| A skipped test is a failure | `check` sets `FC_REQUIRE_DB=1`; an integration test that skips fails the run and is named |
 
-Bank narrations are free text copied from whoever sent you money, so they are
-treated as hostile input. The first defence is structural: no model here can
-close, tier or price anything, so a successful injection produces a suggestion a
-human rejects. Beyond that, narrations are sanitised, delimited and scanned, and
-a narration carrying instruction-shaped text is flagged to you as
-`suspicious_narration`.
+Bank narrations are treated as hostile input. They are sanitised, delimited and scanned, and a narration carrying instruction-shaped text is flagged to you as a security finding.
 
-### CI
+## Known limits
 
-| Job | What it proves |
-|---|---|
-| `engine-isolation` | unit tests pass with no `DATABASE_URL` and no model keys in the environment |
-| `guards` | no float in money, no LLM in decision modules, `mypy --strict`, ruff |
-| `integration` | RLS, the read-only transaction, `dry_run` and the audit chain run against real Postgres |
-| `frontend` | the generated client builds; schema drift cannot merge |
-| `eval` | `false_auto_resolutions == 0` blocks the merge |
+- Labelling is weaker than matching. Some unresolved items are filed under a neighbouring category. They still reach the queue; the failure is a wrong heading on a correct escalation, never a wrongly closed settlement.
+- A settlement that straddles a mid-period fee change is not closed by one flat rate yet.
+- NACH batch lines with no member detail never resolve. That is a permanent escalation, not a bug.
+- ICICI, IDFC and Tally XML formats are modelled from the generator, not sourced from live exports. HDFC is real.
 
----
-
-## 🖥️ Screens
-
-| Screen | What it shows |
-|---|---|
-| Overview | Is my money under control? Matched, rule-explained and waiting-for-you, at a glance |
-| Run | Files in, rows read, rows rejected and why, then the reconciliation stage by stage |
-| Decisions | The ranked queue. Open one for the evidence, the consequence of ignoring it and the recommended action |
-| Settlements | Every settlement as a register: reported, credited, booked, and where it stands |
-| Reconcile | Gross to bank, line by line. Click any line to open the rows behind it |
-| Cash | At risk, held in reserve, claimable as GST input credit |
-| Rule Book | Deduction policy as versioned rules. Draft, back-test, activate |
-| Controller Activity | What the engine did this run, and every model call with its fallback |
-| Audit Trail | Every decision in a hash chain. Export as CSV or JSONL |
-| Evaluation | Precision and recall per stage, the coverage curve, the four gates |
-| Records | Every normalised row from every source, searchable |
-| Guide | What this is, the architecture, and a ten-minute walkthrough |
-| Settings | Notification address and the run-complete email toggle |
-
-The assistant in the top bar answers plain-English questions from the data and
-shows the SQL it ran.
-
-### Email notifications
-
-The controller reports without being asked. With an address set in Settings:
-
-| Email | Sent when |
-|---|---|
-| Run summary | a reconciliation completes: matched, rule-resolved, decisions waiting, cash at risk |
-| Escalation alert | a decision reaches the escalate tier |
-| Daily digest | the scheduler's daily job |
-| Rule suggestion | the learner drafts a rule from repeated fixes |
-| Deadline reminder | 48 hours before a chargeback or reserve deadline |
-
-`POST /settings/send-run-summary` sends the run summary on demand, so the flow
-can be exercised without waiting for a run. Sending is fire-and-forget: a mail
-provider outage never fails or blocks the run that triggered it, and every
-interpolated value is HTML-escaped, because a bank narration is the least
-trustworthy string in the system.
-
----
-
-## ⚠️ Known limits
-
-Published because a reconciliation tool that hides its failures is worse than
-no tool. `eval` prints every scored-wrong item with ids and amounts.
-
-- **Labelling is weaker than matching.** `missing_in_gateway` recall is 0% and
-  `missing_in_bank` is 2.7%; they get filed under neighbouring categories.
-  Every one still reaches the human queue. The failure is a wrong heading on a
-  correct escalation, never a wrongly closed settlement.
-- **Mid-period rate changes are not closed yet.** A settlement that straddles a
-  fee change needs the rule applied per order and summed. Today a single rate
-  only shrinks the exception.
-- **NACH batch lines never resolve.** A batch credit with no member detail is
-  not a bug; it is a permanent escalation.
-- **The coverage curve is flat on this corpus.** 100% precision and 0 false
-  positives at every threshold from 0.70 to 1.00. Stage eligibility and the
-  never-auto gate decide auto-close here, not the threshold.
-- **Some bank formats are modelled, not sourced.** HDFC is real. ICICI, IDFC
-  and Tally XML follow the generator, which is their only source of truth.
-- **Model health counters are per process.** The deployment is a single
-  instance; `/agent/health` reports `health_scope: "process"`.
-
----
-
-## 📁 Project structure
+## Project structure
 
 ```
-engine/src/fc/
-  ingest/        3 source adapters, 4 bank dialects, PDF and XML, validators
-  matching/      blocking, 5-stage cascade, three-way, tolerance, confidence
-  rules/         Decimal-safe YAML loader, evaluator, scope, back-test, learner
-  exceptions/    classify, cluster, tier, priority, consequence, recommend
-  cash/          the reconciliation bridge
-  audit/         hash-chained ledger, deterministic replay
-  agent/         command validator, permissions
-  llm/           model router, SQL guard, grounding, injection defence, prompts
-  eval/          report, confusion matrix, coverage curve
-  generator/     21-scenario synthetic corpus with ground truth
-api/             15 routers, 78 endpoints, dry_run on every write
-db/              13 tables, RLS, immutability trigger, append-only audit
-web/             Next.js 15 dashboard, generated client
-tests/           unit (offline), integration (real Postgres), eval
+engine/src/fc/   pure domain logic: ingest, matching, rules, exceptions, cash, audit, agent, llm, eval, generator
+api/             FastAPI routers, notifications, scheduler
+db/              SQLAlchemy models and Alembic migrations
+web/             Next.js dashboard with a generated API client
+tests/           unit (offline), integration (real Postgres), eval (accuracy gates)
 docs/PRD.md      full technical specification
 ```
 
----
-
-## 🛠️ Commands
+## Commands
 
 | Command | What it does |
 |---|---|
-| `./scripts/dev.ps1 setup` | `uv sync` and `npm install` |
-| `./scripts/dev.ps1 api` | API server on :8000 |
-| `./scripts/dev.ps1 web` | Dashboard on :3000 |
-| `./scripts/dev.ps1 demo` | Seed the corpus and reconcile it |
-| `./scripts/dev.ps1 demo-local` | Same, local Postgres, no network |
-| `./scripts/dev.ps1 eval` | Accuracy suite, exits non-zero on a failed gate |
-| `./scripts/dev.ps1 fast` | Lint, types and unit tests, about 30 s |
-| `./scripts/dev.ps1 check` | Everything including integration and eval, about 3 min |
-| `./scripts/dev.ps1 migrate` | Apply migrations |
-| `./scripts/dev.ps1 generate -Seed 42 -N 500` | Regenerate the synthetic corpus |
-| `./scripts/dev.ps1 client` | Regenerate the TypeScript client |
+| `./scripts/dev.ps1 fast` | lint, types, unit tests, about 30 s |
+| `./scripts/dev.ps1 check` | everything, including integration and the eval gates |
+| `./scripts/dev.ps1 eval` | accuracy suite, exits non-zero on a failed gate |
+| `./scripts/dev.ps1 generate -Seed 42 -N 500` | regenerate the synthetic corpus |
+| `./scripts/dev.ps1 client` | regenerate the TypeScript client after a model change |
 
 A `Makefile` mirrors every target for machines with GNU Make.
 
-`FC_APP_PASSWORD` is the login for `fc_app_user`, the non-owner role the
-migration creates. Row-level security binds on that role, so the API cannot run
-without it.
-
 ---
 
-Specification: [`docs/PRD.md`](docs/PRD.md). Engineering conventions and known pitfalls: [`CLAUDE.md`](CLAUDE.md).
+Specification: [`docs/PRD.md`](docs/PRD.md). Engineering conventions: [`CLAUDE.md`](CLAUDE.md).
