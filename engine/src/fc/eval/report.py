@@ -75,11 +75,11 @@ _INGESTED_AT = INGESTED_AT
 _RUN_ID = RUN_ID
 _TENANT_ID = TENANT_ID
 
-#: Chosen after reading the sweep (see the rationale printed alongside it):
-#: coverage keeps climbing past 0.94 but so does the false-positive count on
-#: this corpus, and 0.94 is the last point before that trade turns unfavourable.
-#: Kept here rather than only in ``Config`` so the report can say *why* the
-#: shipped point is the shipped point without re-deriving it from the curve.
+#: The shipped auto-close threshold, marked on the printed sweep. The sentence
+#: under the curve is computed from the points (``_curve_rationale``), not
+#: written here: on the reference corpus the sweep is flat at 0 false
+#: positives, so the threshold is not what decides auto-close there.
+#: Kept here rather than only in ``Config`` so the report can mark the point.
 SHIPPED_AUTO_THRESHOLD = Decimal("0.94")
 
 
@@ -273,7 +273,7 @@ def evaluate(corpus: Corpus, cfg: Config, *, rules: Sequence[Rule] | None = None
 
     category_stats = _category_stats(pipeline_result, gt_label_of)
     amount_by_event = {event.event_id: abs(event.amount_paise) for event in corpus.events}
-    failures = _failures(pipeline_result, group_of, gt_label_of, amount_by_event)
+    failures = _failures(pipeline_result, group_of, gt_label_of, amount_by_event, in_scope=in_scope)
 
     needs_you = [exc for exc in pipeline_result.exceptions if exc.tier != "auto"]
     clustered_ids = {exc.cluster_id for exc in needs_you if exc.cluster_id is not None}
@@ -370,7 +370,14 @@ def _failures(
     group_of: Mapping[str, str | None],
     gt_label_of: Mapping[str, str | None],
     amount_by_event: Mapping[str, int],
+    *,
+    in_scope: frozenset[str],
 ) -> tuple[Failure, ...]:
+    """The honest slide. ``in_scope`` is the same set the gates score over:
+    listing an out-of-scope ledger voucher here as "not escalated" while
+    ``never_auto_after_pipeline`` reads 0 made the two halves of one report
+    contradict each other on every run.
+    """
     failures: list[Failure] = []
 
     for match in pipeline_result.cascade.matches:
@@ -420,6 +427,8 @@ def _failures(
         if exc.tier == "escalate":
             escalated_events.update(exc.event_ids)
     for event_id, label in gt_label_of.items():
+        if event_id not in in_scope:
+            continue
         if label in NEVER_AUTO and event_id not in escalated_events:
             failures.append(
                 Failure(
@@ -653,9 +662,8 @@ def render(report: EvalReport) -> str:
             f"{point.precision * 100:>8.2f}%  {point.false_positives:>5}  "
             f"{point.abstentions:>7}{marker}"
         )
-    lines.append("  rationale: coverage keeps climbing past the shipped point, but so does the")
-    lines.append("  false-positive count on this corpus - 0.94 is the last point before that")
-    lines.append("  trade turns unfavourable (PRD 12.4).")
+    for line in _curve_rationale(report.coverage_curve):
+        lines.append(f"  {line}")
 
     lines.append("")
     lines.append("Per-category breakdown (classification tree, PRD 6.8)")
@@ -712,6 +720,37 @@ class GateResult:
     passed: bool
     actual: str
     threshold: str
+
+
+def _curve_rationale(curve: Sequence[CoveragePoint]) -> tuple[str, ...]:
+    """Say what the sweep actually shows, computed from the points rather
+    than written once and left to go stale. A fixed sentence about a rising
+    false-positive count sat under a curve that read 0 at every threshold.
+    """
+    if not curve:
+        return ("rationale: no sweep points.",)
+    first, last = curve[0], curve[-1]
+    max_fp = max(point.false_positives for point in curve)
+    flat = all(
+        point.coverage == first.coverage and point.false_positives == first.false_positives
+        for point in curve
+    )
+    if flat:
+        return (
+            f"rationale: flat. Coverage {first.coverage * 100:.2f}% and"
+            f" {first.false_positives} false positives at every threshold from"
+            f" {first.threshold} to {last.threshold}.",
+            "The auto threshold is not the binding constraint on this corpus: stage",
+            "eligibility (stage_may_auto_close) and the NEVER_AUTO gate decide auto-close.",
+            "The threshold starts to matter on data where a provable stage yields a wrong pair.",
+        )
+    below = [p for p in curve if p.threshold < SHIPPED_AUTO_THRESHOLD]
+    fp_below = max((p.false_positives for p in below), default=0)
+    return (
+        f"rationale: coverage moves from {first.coverage * 100:.2f}% to"
+        f" {last.coverage * 100:.2f}% across the sweep; false positives peak at {max_fp}.",
+        f"Shipped {SHIPPED_AUTO_THRESHOLD} carries {fp_below} false positives below it (PRD 12.4).",
+    )
 
 
 def check_gates(report: EvalReport, cfg: Config) -> tuple[GateResult, ...]:
