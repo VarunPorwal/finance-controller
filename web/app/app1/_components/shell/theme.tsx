@@ -12,9 +12,9 @@ type Theme = "dark" | "light";
 const COOKIE_KEY = "fc_theme";
 
 function readThemeCookie(): Theme {
-  if (typeof document === "undefined") return "dark";
+  if (typeof document === "undefined") return "light";
   const match = document.cookie.match(/(?:^|;\s*)fc_theme=(dark|light)(?:;|$)/);
-  return match ? (match[1] as Theme) : "dark";
+  return match ? (match[1] as Theme) : "light";
 }
 
 function writeThemeCookie(theme: Theme) {
@@ -32,7 +32,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(readThemeCookie);
   const toggle = useCallback(() => {
     setTheme((t) => {
-      const next = t === "dark" ? "light" : "dark";
+      const next: Theme = t === "dark" ? "light" : "dark";
       writeThemeCookie(next);
       return next;
     });

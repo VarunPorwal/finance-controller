@@ -27,7 +27,7 @@ import {
   SourceTrace,
   SubBar,
   Tiles,
-  UnmatchedByDay,
+  UnmatchedByRun,
   openExceptionsOf,
   openSubtotalOf,
 } from "./_overview-fc/blocks";
@@ -45,6 +45,7 @@ export default function OverviewPage() {
   const matches = useMatches(run?.run_id);
   const eventsCount = useEventsCount(run?.run_id);
   const runs = useRuns("original", 5);
+  const recentRuns = useRuns("all", 8);
 
   const prevRun = (runs.data ?? [])
     .filter((r) => r.run_id !== run?.run_id && run && r.started_at < run.started_at && r.finished_at !== null)
@@ -107,7 +108,7 @@ export default function OverviewPage() {
           <SourceTrace bySource={eventsCount.data?.by_source} matches={matches.data} openExceptions={open} />
 
           <div className="fc-split mb-3" style={{ alignItems: "stretch" }}>
-            <UnmatchedByDay exceptions={open} asOfIso={run.period_end ?? run.started_at} index={0} />
+            <UnmatchedByRun runs={recentRuns.data} currentRunId={run?.run_id} index={0} />
             <div className="flex flex-col gap-3">
               <CashPosition balance={bridge.data?.books_vs_bank.bank_balance_paise} inflow={inflow} outflow={outflow} index={0} />
               <NeedsDecision items={topNeeds} counterpartyOf={counterpartyOf} index={1} />

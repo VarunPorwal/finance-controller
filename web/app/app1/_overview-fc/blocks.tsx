@@ -9,7 +9,9 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { useQueries } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Sparkles, Wallet } from "lucide-react";
+import { apiClient } from "@/lib/client";
 import {
   useMatches,
   useNarrative,
@@ -245,38 +247,52 @@ export function Tiles({
 
 /* ---------- unmatched value by day ---------- */
 
-export function UnmatchedByDay({
-  exceptions,
-  asOfIso,
-  index = 0,
-}: {
-  exceptions: Exception[] | undefined;
-  asOfIso: string;
-  index?: number;
-}) {
-  const days = useMemo(() => {
-    if (!exceptions) return null;
-    const asOf = new Date(asOfIso);
-    const buckets: { key: string; label: string; paise: number }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(asOf);
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      const label = i === 0 ? "Today" : new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short" }).format(d);
-      buckets.push({ key, label, paise: 0 });
-    }
-    const byKey = new Map(buckets.map((b) => [b.key, b]));
-    for (const e of exceptions) {
-      const key = e.created_at.slice(0, 10);
-      const bucket = byKey.get(key);
-      if (bucket) bucket.paise += e.amount_paise;
-    }
-    return buckets;
-  }, [exceptions, asOfIso]);
+/**
+ * Unmatched left over run over run — not a single run's exceptions bucketed
+ * by the day they were raised (every exception in one run shares that run's
+ * processing timestamp, so that view was flat except for one bar). Each run
+ * computes its own exceptions from scratch (CLAUDE.md: nothing carries
+ * forward between runs), so this fetches each of the last few complete
+ * runs' own open exceptions and sums them independently, one bar per run.
+ */
+export function UnmatchedByRun({ runs, currentRunId, index = 0 }: { runs: RunOut[] | undefined; currentRunId: string | undefined; index?: number }) {
+  const recentRuns = useMemo(() => {
+    if (!runs) return [];
+    return [...runs]
+      .filter((r) => r.status === "complete")
+      .sort((a, b) => (a.started_at < b.started_at ? -1 : a.started_at > b.started_at ? 1 : 0))
+      .slice(-7);
+  }, [runs]);
 
-  const total = days ? sumPaise(days.map((d) => d.paise)) : 0;
-  const isEmpty = days !== null && total === 0;
-  const max = days ? Math.max(1, ...days.map((d) => d.paise)) : 1;
+  const results = useQueries({
+    queries: recentRuns.map((r) => ({
+      queryKey: ["a1", "run", r.run_id, "exceptions", "open-subtotal"],
+      queryFn: async () => {
+        const { data } = await apiClient.GET("/api/v1/exceptions", {
+          params: { query: { run_id: r.run_id, status: "open", limit: 2000 } },
+        });
+        return data?.items ?? [];
+      },
+    })),
+  });
+
+  const bars = useMemo(() => {
+    if (!runs) return null;
+    return recentRuns.map((r, i) => {
+      const rows = results[i]?.data;
+      const paise = rows ? openSubtotalOf(openExceptionsOf(rows)) : 0;
+      const label =
+        r.run_id === currentRunId
+          ? "Latest"
+          : new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short" }).format(new Date(r.started_at));
+      return { key: r.run_id, label, paise, loaded: rows !== undefined };
+    });
+  }, [runs, recentRuns, results, currentRunId]);
+
+  const loading = !bars || bars.some((b) => !b.loaded);
+  const total = bars ? sumPaise(bars.map((b) => b.paise)) : 0;
+  const isEmpty = bars !== null && bars.length > 0 && !loading && total === 0;
+  const max = bars ? Math.max(1, ...bars.map((b) => b.paise)) : 1;
 
   return (
     <motion.div
@@ -286,14 +302,18 @@ export function UnmatchedByDay({
       transition={{ duration: 0.2, delay: index * 0.04 }}
     >
       <div className="shrink-0">
-        <div className="fc-card-title mb-1" style={{ fontSize: 16 }}>Unmatched value by day</div>
-        <div className="fc-label mb-2" style={{ fontSize: 12 }}>Open exceptions raised each day, last 7 days</div>
+        <div className="fc-card-title mb-1" style={{ fontSize: 16 }}>Unmatched value by run</div>
+        <div className="fc-label mb-2" style={{ fontSize: 12 }}>Open exceptions left after each of the last {bars?.length || 7} runs</div>
       </div>
-      {!days ? (
+      {loading ? (
         skel("h-32 w-full")
+      ) : bars.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center" style={{ minHeight: 132 }}>
+          <span className="fc-faint" style={{ fontSize: 12.5 }}>No completed runs yet.</span>
+        </div>
       ) : isEmpty ? (
         <div className="flex flex-1 items-center justify-center" style={{ minHeight: 132 }}>
-          <span className="fc-faint" style={{ fontSize: 12.5 }}>No exceptions raised in the last seven days.</span>
+          <span className="fc-faint" style={{ fontSize: 12.5 }}>No open exceptions across recent runs.</span>
         </div>
       ) : (
         <div className="flex flex-1 flex-col gap-2">
@@ -307,20 +327,20 @@ export function UnmatchedByDay({
             </div>
             <div className="min-w-0 flex-1">
               <div className="fc-chart" style={{ height: "100%", marginTop: 0 }}>
-                {days.map((d, i) => (
+                {bars.map((b, i) => (
                   <div
-                    key={d.key}
-                    className={i === days.length - 1 ? "is-peak" : undefined}
-                    style={{ height: `${Math.max(4, (d.paise / max) * 100)}%` }}
-                    title={`${d.label}: ${money(d.paise)}`}
+                    key={b.key}
+                    className={i === bars.length - 1 ? "is-peak" : undefined}
+                    style={{ height: `${Math.max(4, (b.paise / max) * 100)}%` }}
+                    title={`${b.label}: ${money(b.paise)}`}
                   />
                 ))}
               </div>
             </div>
           </div>
           <div className="fc-xaxis" style={{ marginTop: 0, paddingLeft: 48 }}>
-            {days.map((d) => (
-              <span key={d.key}>{d.label}</span>
+            {bars.map((b) => (
+              <span key={b.key}>{b.label}</span>
             ))}
           </div>
         </div>
