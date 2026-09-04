@@ -12,9 +12,9 @@ type Theme = "dark" | "light";
 const COOKIE_KEY = "fc_theme";
 
 function readThemeCookie(): Theme {
-  if (typeof document === "undefined") return "light";
+  if (typeof document === "undefined") return "dark";
   const match = document.cookie.match(/(?:^|;\s*)fc_theme=(dark|light)(?:;|$)/);
-  return match ? (match[1] as Theme) : "light";
+  return match ? (match[1] as Theme) : "dark";
 }
 
 function writeThemeCookie(theme: Theme) {

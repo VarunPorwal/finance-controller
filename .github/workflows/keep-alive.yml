@@ -1,27 +1,55 @@
 name: Keep API alive
 
-# Render's free plan spins the service down after ~15 minutes idle, and the
-# in-process scheduler (api/scheduler.py's keep_alive_job) can't prevent that
-# — it sleeps when Render sleeps. This is the external pinger: a request
-# every 10 minutes keeps the instance warm so the first real request of a
-# demo isn't the one paying the cold-start cost.
+# Two things go to sleep when nobody is looking. Render's free plan spins the
+# web service down after about 15 minutes idle. Neon suspends the database
+# compute after 5 minutes idle. The in-process scheduler cannot help with
+# either; it sleeps when Render sleeps. So this is the external pinger.
 #
-# Picked over UptimeRobot: this needs no new account or email verification,
-# and the repo already runs GitHub Actions for CI.
+# Every 5 minutes (the smallest interval GitHub allows) it hits /health, which
+# wakes Render, and /health/ready, which opens a database connection and wakes
+# Neon. A cold Render instance takes 30 to 60 seconds to answer, so the first
+# attempt is allowed to time out and a second attempt follows; the first
+# request already started the wake-up even when it times out.
+#
+# GitHub runs scheduled workflows on a best-effort basis and can be minutes
+# late at busy times. That is why the interval is 5 and not 10: two late
+# 10-minute pings in a row cross Render's idle limit; two late 5-minute pings
+# do not.
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+env:
+  API: https://finance-controller-api-09yw.onrender.com
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
-      - name: GET /health
+      - name: Wake the API and the database
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://finance-controller-api-09yw.onrender.com/health)
-          echo "status: $code"
-          if [ "$code" != "200" ]; then
-            echo "::warning::finance-controller-api /health returned $code"
-          fi
+          ping() {
+            local path="$1"
+            local code
+            for attempt in 1 2 3; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$API$path" || true)
+              echo "$path attempt $attempt: $code"
+              if [ "$code" = "200" ]; then
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::warning::$path did not return 200 after 3 attempts (last: $code)"
+            return 0
+          }
+          ping /health
+          ping /health/ready
