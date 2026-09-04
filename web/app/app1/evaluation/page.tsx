@@ -35,11 +35,11 @@ function useDemoCorpusEval() {
   });
 
   const loading = runs.isLoading || (candidates.length > 0 && results.some((r) => r.isLoading));
-  let best: { run: (typeof candidates)[number]; ev: EvalResult } | null = null;
-  candidates.forEach((r, i) => {
+  const best = candidates.reduce<{ run: (typeof candidates)[number]; ev: EvalResult } | null>((acc, r, i) => {
     const ev = results[i]?.data;
-    if (ev && (!best || r.started_at > best.run.started_at)) best = { run: r, ev };
-  });
+    if (ev && (!acc || r.started_at > acc.run.started_at)) return { run: r, ev };
+    return acc;
+  }, null);
   return { data: best, loading, error: runs.error };
 }
 
