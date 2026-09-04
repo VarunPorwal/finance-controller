@@ -56,7 +56,7 @@ export default function LandingPage() {
               Gates
             </a>
           </nav>
-          <Link href="/" className="btn btn-primary h-[34px] rounded-full px-4">
+          <Link href="/app1" className="btn btn-primary h-[34px] rounded-full px-4">
             Open the controller
             <ArrowRight width={13} height={13} />
           </Link>
@@ -83,7 +83,7 @@ export default function LandingPage() {
               cannot, and hands you a ranked queue of the decisions only a human can make.
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-4">
-              <LiquidCta href="/" label="Open the controller" />
+              <LiquidCta href="/app1" label="Open the controller" />
               <a href="#bridge" className="m-ghost">
                 See how it proves it
                 <ArrowDown width={14} height={14} />
@@ -258,7 +258,7 @@ export default function LandingPage() {
             The demo corpus runs in about a second. Every number on this page came from it.
           </p>
           <div className="mt-8 flex justify-center">
-            <LiquidCta href="/" label="Open the controller" />
+            <LiquidCta href="/app1" label="Open the controller" />
           </div>
         </Reveal>
       </section>
