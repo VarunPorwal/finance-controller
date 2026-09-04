@@ -36,7 +36,7 @@ export function Sidebar() {
       <Link href="/landing" className="fc-brand">
         <span className="fc-mark">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
-            <path d="M3.5 4.2 8 8m-4.5 3.8L8 8m5-0.2L8 8" stroke="#fff" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
+            <path d="M3.5 4.2 8 8m-4.5 3.8L8 8m5-0.2L8 8" stroke="var(--fc-text-3)" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
             <circle cx="3.5" cy="4.2" r="1.7" fill="#6ea8ff" />
             <circle cx="3.5" cy="11.8" r="1.7" fill="#f49ac1" />
             <circle cx="13" cy="7.8" r="1.7" fill="#d6dce6" />

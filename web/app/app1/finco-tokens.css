@@ -89,7 +89,8 @@
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  background: var(--fc-accent);
+  border: 1px solid var(--fc-border);
+  background: var(--fc-hover);
   display: grid;
   place-items: center;
   font-size: 14px;
