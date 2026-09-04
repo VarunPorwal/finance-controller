@@ -154,7 +154,7 @@ export default function LandingPage() {
               carry it.
             </p>
             <p className="mt-3 text-[13.5px] text-ink-3">
-              A rule shrinks an exception. It never passes or fails one. "₹3,240 unexplained after rule X applied", not "₹19,000 mismatch".
+              A rule shrinks an exception. It never passes or fails one. &ldquo;₹3,240 unexplained after rule X applied&rdquo;, not &ldquo;₹19,000 mismatch&rdquo;.
             </p>
             <Link href="/reconcile" className="mt-6 inline-flex items-center gap-1.5 text-[14px] text-accent hover:underline">
               Open the reconciliation <ArrowRight width={13} height={13} />
