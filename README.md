@@ -130,6 +130,34 @@ flowchart LR
 
 Every model call falls back to a working non-AI answer. With every provider down, reconciliation still runs and every number still computes.
 
+## Engineering decisions
+
+The choices that shape the system, and what each one costs.
+
+**Five stages instead of one score.** A single weighted score would be shorter code and would lose the reason a match was made. The stage is the reason, and the reason is what an auditor reads. Cost: a row that a blended score could have matched sometimes lands in the queue instead.
+
+**A group is only as provable as its weakest leg.** Confidence and the auto-close decision are computed across every leg of a group, never taken from the stage that formed it. A fuzzy leg joining an exact-reference group caps the whole group at 0.75 and keeps it open. This bug appeared twice in adjacent lines before the data model started refusing to construct such a group.
+
+**Stage 1 skips blocking.** Blocking buckets by amount and date. A bank batch credit and the gateway rows inside it sit in different buckets by construction, so running stage 1 through blocking would hide exactly the groups it exists to find. It is a hash join on reference values instead.
+
+**A shared reference prefix is not evidence.** An RBI UTR is bank, year, day of year and sequence, so one bank's UTRs share a long prefix all year. Stage 3 needs a unique completion of a partial reference, and stage 5 scores two complete but different references as a disagreement, not a near miss.
+
+**Two references in one narration identify neither.** "Reserve release for setl_B against setl_A" used to merge two settlements. Reference extraction now requires exactly one identity claim per row. Extraction is not attribution.
+
+**No bank leg, no auto-close.** Gateway and ledger are both statements of what should have happened. Only the bank statement proves money moved.
+
+**The rule book answers the question the books ask.** Stage 2 already absorbs whatever fee was charged by computing expected net from the gateway's own rows, so feeding rules the cascade's delta gave every rule a gap near zero and made the whole rule book look inert. Rules explain the gap between gross as booked and net as paid.
+
+**Rules are learned by arithmetic, not by a model.** Three human resolutions of the same shape produce a draft with a back-test attached. The numbers come from the resolutions themselves, so the result is reproducible offline. A draft never activates itself.
+
+**Money is integer paise all the way down.** Decimal for intermediate arithmetic, int for storage, and an AST scan that fails the build on a float literal in any money module. YAML rates are parsed from the scalar's own text, because a YAML float is already wrong before it reaches Decimal.
+
+**The eval measures what it claims.** The pairwise metric is blind to a duplicate voucher auto-closed with its settlement, because ground truth files them in one group. So there is a second counter for never-auto events inside auto-closed matches, and a third, gated, that asks whether the finished pipeline escalated every such event. All three print side by side with the caveat next to them.
+
+**Determinism is a correctness gate.** Same seed, same ruleset, byte-identical output, checked by running the pipeline twice inside the eval. No wall clock in logic, no unordered iteration. It is what makes a replay against a new rule version meaningful.
+
+**The database enforces what code cannot.** Row-level security on a role without bypass rights. A trigger that rejects edits to an active rule. UPDATE and DELETE revoked on the audit table. Each is a grant or a trigger, not a convention.
+
 ## Quick start
 
 Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 20+, Postgres 16 with `pgvector`.
