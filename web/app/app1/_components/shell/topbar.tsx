@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Search, Play, ChevronDown } from "lucide-react";
+import { Search, Play, ChevronDown, Menu } from "lucide-react";
 import { activeNav } from "./nav";
 import { useAgentHealth, useCurrentRun } from "../../_lib/api";
 import { formatDurationMs, formatDateTime, formatCount, shortId } from "../../_lib/format";
@@ -13,13 +13,22 @@ export function Topbar() {
   const nav = activeNav(pathname);
   const { run, summary, loading } = useCurrentRun();
   const { data: health } = useAgentHealth();
-  const { setPaletteOpen } = useShell();
+  const { setPaletteOpen, setSidebarOpen } = useShell();
 
   return (
     <header
-      className="flex h-[52px] shrink-0 items-center gap-3 px-5"
+      className="flex h-[52px] shrink-0 items-center gap-3 px-3 sm:px-5"
       style={{ borderBottom: "1px solid var(--fc-border)", background: "color-mix(in srgb, var(--fc-bg) 80%, transparent)", backdropFilter: "blur(6px)" }}
     >
+      <button
+        onClick={() => setSidebarOpen(true)}
+        className="fc-btn shrink-0 md:hidden"
+        style={{ padding: "6px 8px" }}
+        aria-label="Open navigation"
+      >
+        <Menu size={16} strokeWidth={1.6} />
+      </button>
+
       <div className="min-w-0 flex-1 overflow-hidden">
         <div className="flex items-baseline gap-2 whitespace-nowrap">
           <span className="fc-strong shrink-0" style={{ fontSize: 13.5, fontWeight: 500 }}>{nav?.label ?? "Finco"}</span>
@@ -34,20 +43,17 @@ export function Topbar() {
           title="This run. Click to see how it read the evidence."
         >
           <span className="fc-dot" style={{ background: "var(--fc-ok)" }} />
-          <span className="fc-num fc-muted">run·{shortId(run.run_id)}</span>
+          <span className="fc-num fc-muted hidden sm:inline">run·{shortId(run.run_id)}</span>
           <span className="fc-faint hidden xl:inline">{formatDateTime(run.started_at)}</span>
           <span className="fc-faint hidden xl:inline">·</span>
           <span className="fc-num hidden xl:inline">{formatCount(summary?.event_count ?? run.record_count ?? 0)} rows</span>
           {run.runtime_ms != null && (
-            <>
-              <span className="fc-faint">·</span>
-              <span className="fc-num">{formatDurationMs(run.runtime_ms)}</span>
-            </>
+            <span className="fc-num hidden sm:inline">{formatDurationMs(run.runtime_ms)}</span>
           )}
           <ChevronDown size={12} strokeWidth={1.6} className="fc-faint" />
         </Link>
       ) : (
-        <span className="fc-faint shrink-0 whitespace-nowrap" style={{ fontSize: 12 }}>{loading ? "Loading run…" : "No run yet"}</span>
+        <span className="fc-faint hidden shrink-0 whitespace-nowrap sm:inline" style={{ fontSize: 12 }}>{loading ? "Loading run…" : "No run yet"}</span>
       )}
 
       {health && (
@@ -91,9 +97,9 @@ export function Topbar() {
         </kbd>
       </button>
 
-      <Link href="/app1/run" className="fc-btn shrink-0" style={{ fontSize: 13 }}>
+      <Link href="/app1/run" className="fc-btn shrink-0" style={{ fontSize: 13 }} title="Run reconciliation">
         <Play size={13} strokeWidth={1.6} />
-        Run reconciliation
+        <span className="hidden sm:inline">Run reconciliation</span>
       </Link>
     </header>
   );

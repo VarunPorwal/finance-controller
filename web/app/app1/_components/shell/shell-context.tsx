@@ -9,6 +9,8 @@ interface ShellState {
   assistantPrefill: string;
   paletteOpen: boolean;
   setPaletteOpen: (v: boolean) => void;
+  sidebarOpen: boolean;
+  setSidebarOpen: (v: boolean) => void;
 }
 
 const Ctx = createContext<ShellState | null>(null);
@@ -17,6 +19,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantPrefill, setPrefill] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const openAssistant = useCallback((prefill = "") => {
     setPrefill(prefill);
@@ -41,8 +44,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ assistantOpen, openAssistant, closeAssistant, assistantPrefill, paletteOpen, setPaletteOpen }),
-    [assistantOpen, openAssistant, closeAssistant, assistantPrefill, paletteOpen],
+    () => ({ assistantOpen, openAssistant, closeAssistant, assistantPrefill, paletteOpen, setPaletteOpen, sidebarOpen, setSidebarOpen }),
+    [assistantOpen, openAssistant, closeAssistant, assistantPrefill, paletteOpen, sidebarOpen],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

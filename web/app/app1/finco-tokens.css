@@ -804,3 +804,27 @@ a.fc-plain-link:hover {
     animation: none !important;
   }
 }
+
+/* Below md, the sidebar is an off-canvas drawer sliding in from the left;
+   at md and up it's back to a normal static rail. Written as plain CSS
+   rather than Tailwind's dynamic translate-x utilities, which weren't
+   being generated for a template-literal class name. */
+.a1-sidebar-drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  transition: transform 200ms ease;
+  transform: translateX(-100%);
+}
+.a1-sidebar-drawer.is-open {
+  transform: translateX(0);
+}
+@media (min-width: 768px) {
+  .a1-sidebar-drawer {
+    position: static;
+    transform: none;
+    z-index: auto;
+  }
+}

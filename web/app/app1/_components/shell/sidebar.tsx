@@ -10,10 +10,10 @@ import { money } from "../../_lib/format";
 import { useShell } from "./shell-context";
 import { useTheme } from "./theme";
 
-function Item({ item, active, badge }: { item: NavItem; active: boolean; badge?: React.ReactNode }) {
+function Item({ item, active, badge, onNavigate }: { item: NavItem; active: boolean; badge?: React.ReactNode; onNavigate?: () => void }) {
   const Icon = item.icon;
   return (
-    <Link href={item.href} className={clsx("fc-nav", active && "is-on")} title={item.question}>
+    <Link href={item.href} className={clsx("fc-nav", active && "is-on")} title={item.question} onClick={onNavigate}>
       <Icon size={15} strokeWidth={1.6} className={active ? "" : "fc-faint"} style={active ? { color: "var(--fc-accent)" } : undefined} />
       <span className="flex-1">{item.label}</span>
       {badge}
@@ -21,7 +21,7 @@ function Item({ item, active, badge }: { item: NavItem; active: boolean; badge?:
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const pathname = usePathname();
   const { runId } = useCurrentRun();
   const { data: bridge } = useCashBridge(runId);
@@ -32,8 +32,8 @@ export function Sidebar() {
   const isActive = (href: string) => (href === "/app1" ? pathname === "/app1" : pathname.startsWith(href));
 
   return (
-    <aside className="fc-rail" style={{ width: 286, flexShrink: 0, borderRight: "1px solid var(--fc-border)" }}>
-      <Link href="/landing" className="fc-brand">
+    <aside className="fc-rail h-full" style={{ width: 286, flexShrink: 0, background: "var(--fc-bg)", borderRight: "1px solid var(--fc-border)" }}>
+      <Link href="/landing" className="fc-brand" onClick={onNavigate}>
         <span className="fc-mark">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
             <path d="M3.5 4.2 8 8m-4.5 3.8L8 8m5-0.2L8 8" stroke="var(--fc-text-3)" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
@@ -57,6 +57,7 @@ export function Sidebar() {
               key={item.href}
               item={item}
               active={isActive(item.href)}
+              onNavigate={onNavigate}
               badge={
                 item.href === "/app1/decisions" && bridge ? (
                   <span className="fc-chip fc-num" style={{ color: "var(--fc-text-2)" }}>
@@ -76,7 +77,7 @@ export function Sidebar() {
         <div className="fc-label" style={{ padding: "0 10px", marginBottom: 4 }}>Evidence</div>
         <nav className="flex flex-col gap-0">
           {EVIDENCE.map((item) => (
-            <Item key={item.href} item={item} active={isActive(item.href)} />
+            <Item key={item.href} item={item} active={isActive(item.href)} onNavigate={onNavigate} />
           ))}
         </nav>
       </div>
@@ -130,7 +131,7 @@ export function Sidebar() {
           </span>
         </button>
 
-        <Item item={SETTINGS} active={isActive(SETTINGS.href)} />
+        <Item item={SETTINGS} active={isActive(SETTINGS.href)} onNavigate={onNavigate} />
       </div>
     </aside>
   );
