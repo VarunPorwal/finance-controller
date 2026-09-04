@@ -6,6 +6,8 @@
 
 Matches what it can prove. Refuses what it cannot. Hands you a short, ranked list of the rest, with evidence.
 
+[![Demo video](https://img.shields.io/badge/Demo%20video-4%20min-FF0000?logo=googledrive&logoColor=white)](https://drive.google.com/file/d/16cOX7_HLcUYUgNEOiAhdQDKvaYpSsnIa/view?usp=sharing)
+[![Live app](https://img.shields.io/badge/Live%20app-finco--agent.vercel.app-000000?logo=vercel&logoColor=white)](https://finco-agent.vercel.app)
 [![CI](https://github.com/VarunPorwal/finance-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunPorwal/finance-controller/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
@@ -15,6 +17,9 @@ Matches what it can prove. Refuses what it cannot. Hands you a short, ranked lis
 </div>
 
 ---
+
+**Demo video (4 min):** https://drive.google.com/file/d/16cOX7_HLcUYUgNEOiAhdQDKvaYpSsnIa/view?usp=sharing
+**Live app:** https://finco-agent.vercel.app
 
 ## What it does
 
