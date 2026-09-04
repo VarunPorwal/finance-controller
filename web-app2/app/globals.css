@@ -1,0 +1,574 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * The controller's surface. Dark, quiet, ruled: a ledger on a screen, not a
+ * dashboard on a poster. Three signal colours carry meaning and nothing else
+ * does. Emerald is "proven", amber is "open", red is "unexplained". Violet is
+ * reserved for anything a model wrote, so the architecture's core guarantee
+ * (the LLM narrates, it never decides) is visible without reading code.
+ *
+ * Geist for every UI string, Geist Mono with tabular figures for every rupee
+ * amount, UTR, rule id and count. A proportional UTR is unreadable.
+ */
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+
+  --color-model: var(--model);
+  --color-model-soft: var(--model-soft);
+  --color-model-line: var(--model-line);
+
+  --color-src-razorpay: var(--src-razorpay);
+  --color-src-bank: var(--src-bank);
+  --color-src-ledger: var(--src-ledger);
+
+  --radius-panel: 12px;
+  --radius-control: 8px;
+  --radius-pill: 6px;
+}
+
+:root {
+  color-scheme: dark;
+
+  --bg: #07080b;
+  --surface: #0d0f14;
+  --surface-2: #12151c;
+  --surface-3: #191d26;
+  --line: #1b1f28;
+  --line-strong: #2a303c;
+
+  --ink: #f1f3f7;
+  --ink-2: #aab2c0;
+  --ink-3: #7d8797;
+  --ink-4: #4f5766;
+
+  /* Interactive: monochrome. Links, focus, the active nav mark. Colour is
+     kept for meaning, so the interactive layer stays achromatic. */
+  --accent: #dfe4ec;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(223, 228, 236, 0.08);
+
+  /* Strong ease-out for anything entering or responding. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --ok: #3ddc97;
+  --ok-soft: rgba(61, 220, 151, 0.1);
+  --warn: #f5a524;
+  --warn-soft: rgba(245, 165, 36, 0.12);
+  --bad: #ff6b6b;
+  --bad-soft: rgba(255, 107, 107, 0.12);
+
+  --model: #b69cff;
+  --model-soft: rgba(182, 156, 255, 0.08);
+  --model-line: rgba(182, 156, 255, 0.28);
+
+  /* Categorical, for the three sources. Distinct from every signal colour. */
+  --src-razorpay: #6ea8ff;
+  --src-bank: #d6dce6;
+  --src-ledger: #f49ac1;
+
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px -16px rgba(0, 0, 0, 0.8);
+  --shadow-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.9), 0 0 0 1px var(--line-strong);
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+    outline-color: var(--accent);
+  }
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  ::selection {
+    background: rgba(138, 180, 255, 0.28);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--ink-3);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border: 3px solid var(--bg);
+    border-radius: 8px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Every number, reference and UTR. Exactly three sizes anywhere: 28 / 22 / 15. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+.panel-raised {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+.panel-model {
+  background: var(--model-soft);
+  border: 1px solid var(--model-line);
+  border-radius: var(--radius-panel);
+}
+
+.label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.th {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 9px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+tr:last-child > .td {
+  border-bottom: 0;
+}
+.row-link {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.row-link:focus-visible {
+  outline: none;
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .row-link:hover {
+    background: var(--surface-2);
+  }
+}
+
+/* A metadata row: facts side by side, separated by hairlines, never by dots. */
+.meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+}
+.meta > * + *::before {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 10px;
+  margin-right: 10px;
+  background: var(--line-strong);
+  vertical-align: -1px;
+}
+
+/* Controls */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    transform 160ms var(--ease-out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover {
+    background: var(--surface-3);
+    border-color: #353c4a;
+  }
+}
+.btn:active {
+  transform: scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-primary {
+  background: var(--ink);
+  color: #0a0b0f;
+  border-color: var(--ink);
+}
+.btn-primary:hover {
+  background: #ffffff;
+  border-color: #ffffff;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-2);
+}
+.btn-ghost:hover {
+  background: var(--surface-2);
+  border-color: transparent;
+  color: var(--ink);
+}
+.btn-ok {
+  background: var(--ok-soft);
+  border-color: rgba(61, 220, 151, 0.35);
+  color: var(--ok);
+}
+.btn-ok:hover {
+  background: rgba(61, 220, 151, 0.18);
+  border-color: rgba(61, 220, 151, 0.5);
+}
+.btn-bad {
+  background: var(--bad-soft);
+  border-color: rgba(255, 107, 107, 0.35);
+  color: var(--bad);
+}
+.btn-bad:hover {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+.btn-model {
+  background: var(--model-soft);
+  border-color: var(--model-line);
+  color: var(--model);
+}
+.btn-model:hover {
+  background: rgba(182, 156, 255, 0.16);
+}
+.btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  border-radius: 7px;
+}
+.btn-lg {
+  height: 38px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 12.5px;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+textarea.input {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled {
+  opacity: 0.5;
+}
+select.input {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-3) 50%),
+    linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 13px,
+    calc(100% - 9px) 13px;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 26px;
+}
+input[type="checkbox"] {
+  accent-color: var(--accent-strong);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+/* Page ground: a faint dot grid, the same field the landing's particles live in. */
+.ground {
+  background-color: var(--bg);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -11px -11px;
+}
+
+/* Skeleton shimmer. Skeletons, never spinners. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Dialog entrance. Never on anything keyboard-toggled. */
+.fade-up {
+  animation: fade-up 200ms var(--ease-out) both;
+}
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Bars grow from the left on data arrival. transform only. */
+.bar-fill {
+  transform-origin: left center;
+  transition: transform 280ms var(--ease-out);
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Hairline divider with a soft centre, for section breaks. */
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--line-strong) 30%, var(--line-strong) 70%, transparent);
+}
+
+/* The proof tree. A monospace tree with rule ids is the correct rendering. */
+.tree {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.tree b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.tree .ok {
+  color: var(--ok);
+}
+.tree .warn {
+  color: var(--warn);
+}
+.tree .bad {
+  color: var(--bad);
+}
+.tree .dim {
+  color: var(--ink-4);
+}
+.tree .bold {
+  font-weight: 600;
+  color: var(--ink);
+}
+.type-cursor {
+  display: inline-block;
+  color: var(--ink);
+  animation: m-caret-blink 1s steps(1) infinite;
+}
+@keyframes m-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .type-cursor {
+    animation: none;
+    display: none;
+  }
+}
+
+/* Motion vocabulary. Entrances ease out hard; on-screen movement eases both ways. */
+:root {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/* Siblings arrive 30ms apart. Decorative, never blocking. */
+.stagger > * {
+  animation: fade-up 220ms var(--ease-out) both;
+}
+.stagger > *:nth-child(2) {
+  animation-delay: 30ms;
+}
+.stagger > *:nth-child(3) {
+  animation-delay: 60ms;
+}
+.stagger > *:nth-child(4) {
+  animation-delay: 90ms;
+}
+.stagger > *:nth-child(5) {
+  animation-delay: 120ms;
+}
+.stagger > *:nth-child(6) {
+  animation-delay: 150ms;
+}
+.stagger > *:nth-child(n + 7) {
+  animation-delay: 180ms;
+}
+
+/* A gauge tick lighting up, a sparkline drawing on, a proof line landing. */
+.tick-in {
+  animation: tick-in 240ms var(--ease-out) both;
+}
+@keyframes tick-in {
+  from {
+    opacity: 0;
+  }
+}
+.draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 640ms var(--ease-out-expo) forwards;
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.tree-line {
+  display: inline-block;
+  animation: line-in 200ms var(--ease-out) both;
+}
+@keyframes line-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+/* Panels that lead somewhere brighten their edge; nothing scales. */
+.panel-link {
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .panel-link:hover {
+    border-color: var(--line-strong);
+  }
+}

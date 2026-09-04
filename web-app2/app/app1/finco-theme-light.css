@@ -1,0 +1,145 @@
+/* finco-theme-light.css
+   Import after finco-tokens.css. Toggle with <html data-theme="light">.
+   Every component class stays the same, only the token values change. */
+
+[data-theme="light"] {
+  /* surfaces */
+  --fc-bg: #ffffff;
+  --fc-card: #ffffff;
+  --fc-card-grad: linear-gradient(180deg, #ffffff 0%, #f7f8fa 100%);
+  --fc-card-hero: linear-gradient(180deg, #ffffff 0%, #eef3fb 100%);
+  --fc-border: #e3e5e9;
+  --fc-divider: #eceef1;
+  --fc-hover: #f5f6f8;
+  --fc-row-sel: #f4f7fd;
+  --fc-card-hover: #f7f9fc;
+
+  /* text — one step darker than a plain white theme would use, since glass
+     surfaces lift everything behind them and need the margin against
+     --fc-glass (the lightest point any text sits on), not against white. */
+  --fc-text: #0d0f12;
+  --fc-text-2: #3c4045;
+  --fc-text-3: #565a60;
+
+  /* glass — the bloom behind the page already carries the blue; the card
+     itself stays a near-neutral, mostly-clear white so it reads as
+     transparent glass over that colour, not as a blue-painted surface.
+     Hero (agent-generated) cards stay one step bluer to stay distinct. */
+  --fc-glass: rgba(255, 255, 255, 0.55);
+  --fc-glass-hero: rgba(240, 246, 255, 0.6);
+  --fc-glass-border: rgba(255, 255, 255, 0.7);
+
+  /* accent */
+  --fc-accent: #1f66d0;
+  --fc-accent-hi: #1a58b5;
+  --fc-accent-dim: #e4edfb;
+
+  /* status */
+  --fc-ok: #15803d;
+  --fc-warn: #b45309;
+  --fc-bad: #c2372e;
+}
+
+/* Components that need a different treatment on light, not just a token swap. */
+
+/* 2. Chart peak bar: white-on-dark doesn't invert to black-on-white, it
+   becomes the accent, same as every other highlighted bar in the app. */
+[data-theme="light"] .fc-chart > .is-peak {
+  background: var(--fc-accent);
+}
+
+/* 3. The light button (white on black) inverts to black on white. */
+[data-theme="light"] .fc-btn--light {
+  background: #0d0f12;
+  color: #ffffff;
+}
+[data-theme="light"] .fc-btn--light:hover {
+  background: #26292e;
+}
+
+/* Ghost button needs a border on light or it disappears into the card. */
+[data-theme="light"] .fc-btn--ghost {
+  background: #ffffff;
+  border: 1px solid var(--fc-border);
+  color: var(--fc-text-2);
+}
+[data-theme="light"] .fc-btn--ghost:hover {
+  background: var(--fc-hover);
+}
+
+/* Icon tile keeps the accent-on-tint relationship. */
+[data-theme="light"] .fc-tile {
+  color: var(--fc-accent);
+}
+
+/* Sidebar active state: on dark it was a lighter fill, here it needs the tint. */
+[data-theme="light"] .fc-nav.is-on {
+  background: var(--fc-accent-dim);
+  color: var(--fc-accent);
+}
+
+/* Chips read too heavy with a gray fill on white. */
+[data-theme="light"] .fc-chip {
+  background: var(--fc-hover);
+  color: var(--fc-text-3);
+}
+
+/* Chrome stays opaque so the bloom reads on the canvas, not through nav. */
+[data-theme="light"] .fc-rail {
+  background: var(--fc-bg);
+}
+
+/* ---------- background bloom (light theme only) ----------
+ * Six off-grid ellipses, indigo to sky, strongest in the corners and
+ * weakest toward the centre where the densest content sits. Fixed to the
+ * viewport, non-interactive, painted behind everything via the negative
+ * z-index established by .fc's own stacking context (finco-tokens.css). */
+[data-theme="light"] .fc-bloom-layer {
+  opacity: 1;
+  background-image:
+    radial-gradient(ellipse 34% 28% at 9% 11%, rgba(79, 70, 229, 0.22), transparent 70%),
+    radial-gradient(ellipse 30% 24% at 91% 8%, rgba(37, 99, 235, 0.2), transparent 70%),
+    radial-gradient(ellipse 32% 26% at 7% 92%, rgba(56, 189, 248, 0.2), transparent 70%),
+    radial-gradient(ellipse 36% 30% at 93% 89%, rgba(67, 56, 202, 0.19), transparent 70%),
+    radial-gradient(ellipse 26% 22% at 23% 54%, rgba(56, 189, 248, 0.16), transparent 70%),
+    radial-gradient(ellipse 28% 22% at 79% 41%, rgba(59, 130, 246, 0.15), transparent 70%);
+}
+
+/* ---------- glass cards (light theme only) ----------
+ * Standard glass for source data, a bluer/more opaque glass for anything
+ * Finco generated, opaque solid for anything holding rows. The border is a
+ * lit highlight, never a gray outline, on glass surfaces only. */
+[data-theme="light"] .fc-card {
+  background: var(--fc-glass);
+  border: 1px solid var(--fc-glass-border);
+  /* The white highlight border reads as a lit edge, not an outline — but a
+     white line disappears against a near-white page. This faint outer line
+     keeps the card visibly delineated everywhere without turning gray. */
+  box-shadow:
+    0 0 0 1px rgba(31, 41, 55, 0.09),
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 10px 24px -12px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(19px) saturate(160%);
+  -webkit-backdrop-filter: blur(19px) saturate(160%);
+}
+[data-theme="light"] .fc-card--hero {
+  background: var(--fc-glass-hero);
+}
+/* Tables and anything holding rows: opaque, solid border, no blur — glass
+ * behind dense rows wrecks readability and scroll performance. */
+[data-theme="light"] .fc-card--flat {
+  background: var(--fc-card);
+  border-color: var(--fc-border);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Unsupported browsers: same fill, opaque, no blur — never see-through. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-theme="light"] .fc-card {
+    background: rgba(255, 255, 255, 0.94);
+  }
+  [data-theme="light"] .fc-card--hero {
+    background: rgba(240, 246, 255, 0.94);
+  }
+}

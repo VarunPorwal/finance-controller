@@ -1,0 +1,680 @@
+/*
+ * app1 — the controller's surface.
+ *
+ * Warm near-black, not blue. Three signal colours carry meaning and nothing
+ * else does: green is "proven", amber is "open", coral is "unexplained /
+ * broken". Violet is reserved for text a model wrote and for the one state
+ * where the system refuses to choose. Brass marks the bank; it is the only
+ * warm metallic and it is used sparingly.
+ *
+ * Depth is three steps: page < card < popover. Cards lift on hover by one
+ * pixel and one border stop, never more.
+ *
+ * Geist for prose, Geist Mono with tabular figures for every amount, id,
+ * UTR and count.
+ */
+
+.a1 {
+  --a1-bg: #0a0a0b;
+  --a1-bg-2: #0d0d0f;
+  --a1-surface: #131315;
+  --a1-surface-2: #18181b;
+  --a1-surface-3: #1f1f23;
+  --a1-surface-4: #26262b;
+
+  --a1-line: rgba(255, 255, 255, 0.07);
+  --a1-line-2: rgba(255, 255, 255, 0.12);
+  --a1-line-3: rgba(255, 255, 255, 0.2);
+
+  --a1-ink: #f3f2ee;
+  --a1-ink-2: #a9a8a2;
+  --a1-ink-3: #8b8a85;
+  --a1-ink-4: #5e5d60;
+
+  --a1-brand: #ece9e1;
+  --a1-brand-2: #c9c6bc;
+  --a1-brass: #d4b483;
+  --a1-brass-soft: rgba(212, 180, 131, 0.14);
+
+  --a1-ok: #3ecf8e;
+  --a1-ok-2: #22b377;
+  --a1-ok-soft: rgba(62, 207, 142, 0.12);
+  --a1-ok-line: rgba(62, 207, 142, 0.35);
+
+  --a1-warn: #f5b942;
+  --a1-warn-soft: rgba(245, 185, 66, 0.12);
+  --a1-warn-line: rgba(245, 185, 66, 0.35);
+
+  --a1-bad: #f26d5b;
+  --a1-bad-soft: rgba(242, 109, 91, 0.12);
+  --a1-bad-line: rgba(242, 109, 91, 0.35);
+
+  --a1-model: #b6a6f2;
+  --a1-model-soft: rgba(182, 166, 242, 0.1);
+  --a1-model-line: rgba(182, 166, 242, 0.3);
+
+  --a1-r-card: 14px;
+  --a1-r-ctl: 9px;
+  --a1-r-pill: 6px;
+
+  --a1-shadow-card: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 1px 2px rgba(0, 0, 0, 0.5),
+    0 14px 36px -20px rgba(0, 0, 0, 0.85);
+  --a1-shadow-card-hover: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 24px 48px -20px rgba(0, 0, 0, 0.9);
+  --a1-shadow-pop: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 40px 90px -30px rgba(0, 0, 0, 0.95),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+
+  --a1-font: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --a1-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  color-scheme: dark;
+  background: var(--a1-bg);
+  color: var(--a1-ink);
+  font-family: var(--a1-font);
+  font-size: 13px;
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss01", "tnum";
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+.a1 * {
+  border-color: var(--a1-line);
+}
+
+.a1 ::selection {
+  background: rgba(236, 233, 225, 0.18);
+}
+
+.a1 :focus-visible {
+  outline: 2px solid var(--a1-brand-2);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.a1 ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.a1 ::-webkit-scrollbar-thumb {
+  background: var(--a1-surface-4);
+  border-radius: 8px;
+  border: 2px solid var(--a1-bg);
+}
+
+/* ---------- type ---------- */
+
+.a1 .num,
+.a1 .mono {
+  font-family: var(--a1-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.a1 .a1-eyebrow {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--a1-ink-3);
+}
+
+.a1 .a1-h1 {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--a1-ink);
+}
+
+.a1 .a1-h2 {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--a1-ink);
+}
+
+.a1 .a1-verdict {
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+  color: var(--a1-ink);
+  text-wrap: balance;
+}
+
+.a1 .a1-money-xl {
+  font-family: var(--a1-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.a1 .a1-money-lg {
+  font-family: var(--a1-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.a1 .a1-muted {
+  color: var(--a1-ink-2);
+}
+.a1 .a1-faint {
+  color: var(--a1-ink-3);
+}
+
+/* ---------- surfaces ---------- */
+
+.a1 .a1-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--a1-surface-2) 0%, var(--a1-surface) 100%);
+  border: 1px solid var(--a1-line);
+  border-radius: var(--a1-r-card);
+  box-shadow: var(--a1-shadow-card);
+  transition:
+    border-color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .a1 .a1-card-hover:hover {
+    border-color: var(--a1-line-2);
+    transform: translateY(-1px);
+  }
+}
+.a1 .a1-card-hover:active {
+  transform: scale(0.995);
+}
+
+.a1 .a1-card-flat {
+  background: var(--a1-surface);
+  border: 1px solid var(--a1-line);
+  border-radius: var(--a1-r-card);
+}
+
+.a1 .a1-inset {
+  background: var(--a1-bg-2);
+  border: 1px solid var(--a1-line);
+  border-radius: 10px;
+}
+
+.a1 .a1-pop {
+  background: var(--a1-surface-3);
+  border: 1px solid var(--a1-line-2);
+  border-radius: var(--a1-r-card);
+  box-shadow: var(--a1-shadow-pop);
+}
+
+.a1 .a1-divider {
+  height: 1px;
+  background: var(--a1-line);
+}
+
+/* A hairline glow under a card's top edge: the "lit from above" depth cue. */
+.a1 .a1-lit::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* ---------- controls ---------- */
+
+.a1 .a1-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--a1-r-ctl);
+  border: 1px solid var(--a1-line-2);
+  background: var(--a1-surface-2);
+  color: var(--a1-ink);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 120ms cubic-bezier(0.23, 1, 0.32, 1),
+    border-color 120ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    color 120ms cubic-bezier(0.23, 1, 0.32, 1);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.a1 button:not(:disabled),
+.a1 [role="button"],
+.a1 a {
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .a1 .a1-btn:hover {
+    background: var(--a1-surface-3);
+    border-color: var(--a1-line-3);
+  }
+}
+.a1 .a1-btn:active,
+.a1 .a1-iconbtn:active,
+.a1 .a1-tab:active,
+.a1 .a1-nav-item:active,
+.a1 .a1-pill:active {
+  transform: scale(0.97);
+}
+.a1 .a1-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.a1 .a1-btn-primary {
+  background: linear-gradient(180deg, #f4f2ec 0%, #d9d6cd 100%);
+  color: #101010;
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 -1px 0 rgba(0, 0, 0, 0.15) inset,
+    0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.a1 .a1-btn-primary:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #e6e3da 100%);
+  border-color: #fff;
+}
+
+.a1 .a1-btn-ok {
+  background: linear-gradient(180deg, rgba(62, 207, 142, 0.22), rgba(62, 207, 142, 0.12));
+  border-color: var(--a1-ok-line);
+  color: var(--a1-ok);
+}
+.a1 .a1-btn-ok:hover {
+  background: linear-gradient(180deg, rgba(62, 207, 142, 0.3), rgba(62, 207, 142, 0.16));
+}
+
+.a1 .a1-btn-danger {
+  background: var(--a1-bad-soft);
+  border-color: var(--a1-bad-line);
+  color: var(--a1-bad);
+}
+
+.a1 .a1-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--a1-ink-2);
+}
+.a1 .a1-btn-ghost:hover {
+  background: var(--a1-surface-2);
+  color: var(--a1-ink);
+  border-color: var(--a1-line);
+}
+
+.a1 .a1-btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.a1 .a1-btn-lg {
+  height: 40px;
+  padding: 0 18px;
+  font-size: 13.5px;
+  border-radius: 11px;
+}
+
+.a1 .a1-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--a1-ink-2);
+  border: 1px solid transparent;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.a1 .a1-iconbtn:hover {
+  background: var(--a1-surface-2);
+  color: var(--a1-ink);
+  border-color: var(--a1-line);
+}
+.a1 .a1-iconbtn[data-active="true"] {
+  background: var(--a1-surface-3);
+  color: var(--a1-ink);
+  border-color: var(--a1-line-2);
+}
+
+.a1 .a1-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 11px;
+  border-radius: var(--a1-r-ctl);
+  border: 1px solid var(--a1-line-2);
+  background: var(--a1-bg-2);
+  color: var(--a1-ink);
+  font-size: 13px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.a1 .a1-input:focus {
+  outline: none;
+  border-color: var(--a1-line-3);
+  box-shadow: 0 0 0 3px rgba(236, 233, 225, 0.08);
+}
+.a1 .a1-input::placeholder {
+  color: var(--a1-ink-3);
+}
+
+.a1 textarea.a1-input {
+  height: auto;
+  padding: 10px 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.a1 .a1-select {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2375746f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.a1 .a1-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--a1-line-2);
+  border-bottom-width: 2px;
+  background: var(--a1-surface-3);
+  font-family: var(--a1-mono);
+  font-size: 10.5px;
+  color: var(--a1-ink-2);
+}
+
+/* ---------- pills ---------- */
+
+.a1 .a1-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--a1-r-pill);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border: 1px solid var(--a1-line-2);
+  background: var(--a1-surface-3);
+  color: var(--a1-ink-2);
+  white-space: nowrap;
+}
+.a1 .a1-pill-ok {
+  background: var(--a1-ok-soft);
+  border-color: var(--a1-ok-line);
+  color: var(--a1-ok);
+}
+.a1 .a1-pill-warn {
+  background: var(--a1-warn-soft);
+  border-color: var(--a1-warn-line);
+  color: var(--a1-warn);
+}
+.a1 .a1-pill-bad {
+  background: var(--a1-bad-soft);
+  border-color: var(--a1-bad-line);
+  color: var(--a1-bad);
+}
+.a1 .a1-pill-model {
+  background: var(--a1-model-soft);
+  border-color: var(--a1-model-line);
+  color: var(--a1-model);
+}
+.a1 .a1-pill-brass {
+  background: var(--a1-brass-soft);
+  border-color: rgba(212, 180, 131, 0.35);
+  color: var(--a1-brass);
+}
+
+.a1 .a1-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* ---------- tables ---------- */
+
+.a1 .a1-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+.a1 .a1-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--a1-ink-3);
+  padding: 8px 12px;
+  background: var(--a1-surface);
+  border-bottom: 1px solid var(--a1-line);
+  white-space: nowrap;
+}
+.a1 .a1-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--a1-line);
+  vertical-align: middle;
+  color: var(--a1-ink);
+}
+.a1 .a1-table tr:last-child td {
+  border-bottom: 0;
+}
+.a1 .a1-table tbody tr {
+  transition: background 120ms ease;
+}
+.a1 .a1-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.a1 .a1-table .r,
+.a1 .r {
+  text-align: right;
+}
+
+/* ---------- tabs ---------- */
+
+.a1 .a1-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--a1-bg-2);
+  border: 1px solid var(--a1-line);
+}
+.a1 .a1-tab {
+  position: relative;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--a1-ink-2);
+  transition: color 140ms ease;
+  white-space: nowrap;
+}
+.a1 .a1-tab:hover {
+  color: var(--a1-ink);
+}
+.a1 .a1-tab[data-active="true"] {
+  color: var(--a1-ink);
+}
+.a1 .a1-tab-ind {
+  position: absolute;
+  inset: 0;
+  border-radius: 7px;
+  background: var(--a1-surface-3);
+  border: 1px solid var(--a1-line-2);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 1px 2px rgba(0, 0, 0, 0.5);
+  z-index: -1;
+}
+
+/* ---------- sidebar ---------- */
+
+.a1 .a1-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  color: var(--a1-ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  position: relative;
+  transition: color 140ms ease, background 140ms ease;
+}
+.a1 .a1-nav-item:hover {
+  color: var(--a1-ink);
+  background: rgba(255, 255, 255, 0.035);
+}
+.a1 .a1-nav-item[data-active="true"] {
+  color: var(--a1-ink);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+.a1 .a1-nav-item[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--a1-brand);
+}
+
+/* ---------- skeleton ---------- */
+
+.a1 .a1-skel {
+  position: relative;
+  overflow: hidden;
+  background: var(--a1-surface-2);
+  border-radius: 6px;
+}
+.a1 .a1-skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: a1-shimmer 1.4s infinite;
+}
+
+@keyframes a1-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------- signal glows ---------- */
+
+.a1 .a1-glow-ok {
+  box-shadow: 0 0 0 1px var(--a1-ok-line);
+}
+.a1 .a1-glow-warn {
+  box-shadow: 0 0 0 1px var(--a1-warn-line);
+}
+.a1 .a1-glow-bad {
+  box-shadow: 0 0 0 1px var(--a1-bad-line);
+}
+.a1 .a1-glow-model {
+  box-shadow: 0 0 0 1px var(--a1-model-line);
+}
+
+/* The one state where the system will not choose. Full width, violet, calm. */
+.a1 .a1-abstain {
+  background: radial-gradient(120% 140% at 50% 0%, rgba(182, 166, 242, 0.16), rgba(182, 166, 242, 0.03) 60%),
+    var(--a1-surface);
+  border: 1px solid var(--a1-model-line);
+  border-radius: var(--a1-r-card);
+  box-shadow: 0 0 80px -20px rgba(182, 166, 242, 0.45), var(--a1-shadow-card);
+}
+
+/* Money that expires on a date. Warm, not violet. */
+.a1 .a1-expires {
+  background: radial-gradient(120% 140% at 50% 0%, rgba(245, 185, 66, 0.16), rgba(245, 185, 66, 0.03) 60%),
+    var(--a1-surface);
+  border: 1px solid var(--a1-warn-line);
+  border-radius: var(--a1-r-card);
+  box-shadow: var(--a1-shadow-card);
+}
+
+/* ---------- motion helpers ---------- */
+
+@keyframes a1-dash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+.a1 .a1-flow {
+  stroke-dasharray: 6 14;
+  animation: a1-dash 1.6s linear infinite;
+}
+
+@keyframes a1-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.a1 .a1-pulse {
+  animation: a1-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes a1-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.a1 .a1-spin {
+  animation: a1-spin 0.65s linear infinite;
+}
+
+/* Grid paper behind hero surfaces. */
+.a1 .a1-grid-bg {
+  background: transparent;
+}
+
+.a1 .a1-scroll {
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.a1 .a1-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a1 .a1-flow,
+  .a1 .a1-skel::after,
+  .a1 .a1-pulse {
+    animation: none;
+  }
+}

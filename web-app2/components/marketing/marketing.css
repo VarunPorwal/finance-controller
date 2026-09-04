@@ -1,0 +1,323 @@
+/* Landing-only styles. The app never loads this file. */
+
+.m-root {
+  min-height: 100vh;
+  background: #05060a;
+  color: var(--ink);
+  overflow-x: hidden;
+  /* Geist Sans for prose/headings (inherited from html), Geist Mono only
+     where digits need to line up: .num and .tree already carry that. */
+  /* Shared easing for every landing hover/motion detail, matching Reveal's cubic-bezier. */
+  --m-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The app keeps every figure in Geist Mono (a UTR must line up). The
+   landing page reads as prose, not a ledger: headings, numbers and body
+   copy all stay in Geist Sans here — tabular-nums is kept so digits still
+   don't shift width as they count up. */
+.m-root .num,
+.m-root .tree {
+  font-family: var(--font-sans);
+}
+
+.m-poster {
+  background-color: #05060a;
+  background-image:
+    radial-gradient(ellipse 60% 50% at 50% 30%, rgba(90, 120, 255, 0.12), transparent 70%),
+    radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size:
+    auto,
+    26px 26px;
+  background-position:
+    center,
+    -13px -13px;
+}
+
+.m-hero-fade {
+  background:
+    radial-gradient(ellipse 55% 60% at 28% 45%, rgba(5, 6, 10, 0.55), transparent 70%),
+    linear-gradient(180deg, rgba(5, 6, 10, 0) 0%, rgba(5, 6, 10, 0) 60%, rgba(5, 6, 10, 0.7) 85%, #05060a 100%);
+}
+
+.m-h1 {
+  font-family: var(--font-mono);
+  font-size: clamp(44px, 6.4vw, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  color: #f4f6fa;
+  text-wrap: balance;
+}
+
+.m-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px;
+  color: var(--ink-2);
+  backdrop-filter: blur(6px);
+}
+
+.m-section {
+  position: relative;
+  padding: 96px 0;
+}
+
+.m-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.m-section-title {
+  font-family: var(--font-mono);
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+  color: #f4f6fa;
+  text-wrap: balance;
+}
+
+/* Cards and frames get a shared hover language: a 2px lift, a deeper
+   shadow, and a soft spotlight that follows the cursor via --mx/--my
+   (set by CardSpotlight's delegated mousemove listener). */
+.m-card,
+.m-frame {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 220ms var(--m-ease),
+    box-shadow 220ms var(--m-ease);
+}
+.m-card::before,
+.m-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(280px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.07), transparent 60%);
+  opacity: 0;
+  transition: opacity 220ms var(--m-ease);
+  pointer-events: none;
+}
+.m-card:hover::before,
+.m-frame:hover::before {
+  opacity: 1;
+}
+.m-card:hover,
+.m-frame:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 24px 48px -28px rgba(0, 0, 0, 0.7);
+}
+
+.m-card {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border-radius: 14px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.m-frame {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 9, 14, 0.85);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 40px 80px -40px rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(8px);
+}
+
+/* A light sheen sweep on hover, shared by every landing button including
+   the header's app-wide .btn.btn-primary (scoped here so the app itself
+   never sees it). */
+.m-ghost,
+.m-metal,
+.m-root .btn.btn-primary {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.m-ghost::before,
+.m-metal::before,
+.m-root .btn.btn-primary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.35) 50%, transparent 60%);
+  transform: translateX(-120%);
+  transition: transform 650ms var(--m-ease);
+  pointer-events: none;
+}
+.m-ghost:hover::before,
+.m-metal:hover::before,
+.m-root .btn.btn-primary:hover::before {
+  transform: translateX(120%);
+}
+
+.m-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+  font-size: 14.5px;
+  font-weight: 500;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+.m-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Fallback CTA when WebGL is unavailable: a conic sheen over dark metal. */
+.m-metal {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 24px;
+  border-radius: 999px;
+  color: #0a0b0f;
+  font-size: 14.5px;
+  font-weight: 600;
+  background: linear-gradient(180deg, #ffffff, #d5d9e2);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.25),
+    0 10px 30px -10px rgba(255, 255, 255, 0.45);
+  overflow: hidden;
+  isolation: isolate;
+}
+.m-metal::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: conic-gradient(from 0deg, transparent 0 70%, rgba(255, 255, 255, 0.9) 78%, transparent 86%);
+  transform: rotate(0deg);
+  transition: transform 900ms var(--ease-out);
+  mix-blend-mode: overlay;
+  z-index: -1;
+}
+.m-metal:hover::after {
+  transform: rotate(360deg);
+}
+.m-metal {
+  transition: transform 160ms var(--ease-out);
+}
+.m-metal:active {
+  transform: scale(0.98);
+}
+
+/* Signal pulses along the source diagram edges. */
+.m-pulse {
+  stroke-dasharray: 6 14;
+  animation: m-dash 2.4s linear infinite;
+}
+@keyframes m-dash {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.m-node-glow {
+  filter: drop-shadow(0 0 10px currentColor);
+}
+
+/* A colored left-edge accent bar for rows (gate rows today), tied to the
+   row's own status tone via `color`, fading in on hover/focus. */
+.m-row {
+  position: relative;
+  transition: background-color 150ms ease;
+}
+.m-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0;
+  transform: scaleY(0.6);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+.m-row:hover,
+.m-row:focus-within {
+  background-color: rgba(255, 255, 255, 0.025);
+}
+.m-row:hover::before,
+.m-row:focus-within::before {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+/* The "LIVE" badge and any other status dot: a slow breathing pulse, never
+   a hard blink. */
+.m-live {
+  animation: m-live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes m-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.94);
+  }
+}
+
+/* Shared entrance stagger: any list item sets --i (its index) inline and
+   gets this class; it stays paused until an ancestor Reveal flips the
+   `in-view` class on scroll-into-view, then the whole list cascades in
+   32ms apart, capped at 40 items so a long list doesn't crawl. */
+.cascade {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: m-cascade-in 0.6s var(--m-ease, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation-delay: calc(min(var(--i, 0), 40) * 32ms);
+  animation-play-state: paused;
+}
+.in-view .cascade {
+  animation-play-state: running;
+}
+@keyframes m-cascade-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .m-metal::after,
+  .m-ghost::before,
+  .m-metal::before,
+  .m-root .btn.btn-primary::before,
+  .m-card,
+  .m-frame {
+    transition: none;
+  }
+  .m-pulse,
+  .m-live {
+    animation: none;
+  }
+  .cascade {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
