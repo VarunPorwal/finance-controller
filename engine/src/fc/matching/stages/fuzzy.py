@@ -406,7 +406,18 @@ def _reference_similarity(
     mine = references_for(left, ledger_refs)
     if not mine:
         return None
-    return max(jaro_winkler(a, b) for a in mine for b in theirs)
+    best = max(jaro_winkler(a, b) for a in mine for b in theirs)
+    if best < _ONE and not (reference_is_truncated(left) or reference_is_truncated(right)):
+        # Two complete references that differ are two different identifiers,
+        # however alike they look. An RBI UTR is bank + year + day-of-year +
+        # sequence, so every UTR one bank issued that year shares its first
+        # six characters, and Jaro-Winkler rewards exactly that prefix: on the
+        # reference corpus HDFC261970000034 against HDFC261929500001 scored
+        # 0.9 and carried a Rs 1,630 gateway row onto a Rs 375 bank credit
+        # from a different counterparty. Partial similarity is only meaningful
+        # when a side is genuinely partial, which is what truncation is.
+        return _ZERO
+    return best
 
 
 def _counterparty_similarity(left: TransactionEvent, right: TransactionEvent) -> Decimal | None:
