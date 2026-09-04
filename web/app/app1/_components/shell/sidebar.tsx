@@ -47,8 +47,8 @@ export function Sidebar() {
       </Link>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="fc-label" style={{ padding: "0 10px", marginBottom: 6 }}>Daily work</div>
-        <nav className="flex flex-col gap-0.5">
+        <div className="fc-label" style={{ padding: "0 10px", marginBottom: 4 }}>Daily work</div>
+        <nav className="flex flex-col gap-0">
           {DAILY.map((item) => (
             <Item
               key={item.href}
@@ -69,20 +69,20 @@ export function Sidebar() {
           ))}
         </nav>
 
-        <div className="fc-divider" style={{ margin: "12px 0" }} />
-        <div className="fc-label" style={{ padding: "0 10px", marginBottom: 6 }}>Evidence</div>
-        <nav className="flex flex-col gap-0.5">
+        <div className="fc-divider" style={{ margin: "8px 0" }} />
+        <div className="fc-label" style={{ padding: "0 10px", marginBottom: 4 }}>Evidence</div>
+        <nav className="flex flex-col gap-0">
           {EVIDENCE.map((item) => (
             <Item key={item.href} item={item} active={isActive(item.href)} />
           ))}
         </nav>
       </div>
 
-      <div className="mt-auto flex flex-shrink-0 flex-col gap-3 pt-3">
+      <div className="mt-auto flex flex-shrink-0 flex-col gap-1.5 pt-2">
         <button
           onClick={() => openAssistant()}
           className="fc-card flex items-center gap-2.5 text-left"
-          style={{ borderRadius: 11, padding: "10px 12px" }}
+          style={{ borderRadius: 11, padding: "8px 10px" }}
         >
           <span className="flex h-6 w-6 items-center justify-center rounded-md" style={{ background: "var(--fc-accent-dim)", color: "var(--fc-accent)" }}>
             <Sparkles size={13} strokeWidth={1.6} />
