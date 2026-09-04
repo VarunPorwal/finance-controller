@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 __all__ = ["DEFAULT_LIMIT", "MAX_LIMIT", "Page", "decode_cursor", "encode_cursor"]
 
 DEFAULT_LIMIT = 50
-MAX_LIMIT = 200
+MAX_LIMIT = 2000
 
 
 class Page[T](BaseModel):
