@@ -179,10 +179,6 @@ The assistant in the top bar answers plain-English questions from the data and s
 
 When a run completes, the summary lands in your inbox without being asked: what matched, what a rule explained, how many decisions are waiting, and the cash at risk. Escalations, deadline reminders, rule suggestions and a daily digest arrive the same way. Sending is fire-and-forget, so a mail provider outage never blocks a run.
 
-<p align="center">
-  <img src="docs/images/run-summary-email.png" alt="Run summary email" width="720">
-</p>
-
 ## Safety and correctness
 
 | Guarantee | Enforced by |
