@@ -57,7 +57,7 @@ export default function IngestPage() {
               </div>
               <div className="mt-3 text-[14px] font-semibold">{c.name}</div>
               <div className="text-[11.5px] text-ink-3">{c.format}</div>
-              <div className="num mt-3 text-[22px] leading-none font-semibold">{connected ? formatCount(count) : "—"}</div>
+              <div className="num mt-3 text-[22px] leading-none font-semibold">{connected ? formatCount(count) : "-"}</div>
               <div className="mt-1 text-[11px] text-ink-3">
                 {connected ? `rows in this run${last ? ` · ${formatDateTime(last.created_at)}` : ""}` : c.note}
               </div>
@@ -95,7 +95,7 @@ export default function IngestPage() {
                         {sourceMeta(src).label}
                       </span>
                     </td>
-                    <td className="td num text-[11.5px] text-ink-2">{String(payload.filename ?? "—")}</td>
+                    <td className="td num text-[11.5px] text-ink-2">{String(payload.filename ?? "-")}</td>
                     <td className="td num text-right text-[15px]">{String(payload.event_count ?? 0)}</td>
                     <td className="td">
                       <Pill tone={rejected > 0 ? "warn" : "ok"}>{rejected > 0 ? `${rejected} rejected` : "Healthy"}</Pill>

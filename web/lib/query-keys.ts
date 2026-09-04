@@ -1,6 +1,6 @@
 // Central key hierarchy so every screen invalidates/prefetches the same
 // keys another screen reads. Keyed by run_id first (nothing here changes
-// unless a run happens — CLAUDE.md's staleTime rationale) so a completed
+// unless a run happens - CLAUDE.md's staleTime rationale) so a completed
 // run can be invalidated with one predicate: queryKey[0] === "run" ||
 // queryKey[1] === runId, see lib/run-context.tsx's refresh().
 export const queryKeys = {
@@ -29,7 +29,7 @@ export const queryKeys = {
   narrative: (runId: string | undefined) => ["run", runId, "narrative"] as const,
 
   // Home's KPI card only needs the bare EvalResult, so it fetches under its
-  // own key rather than sharing evalBundle's — that bundle wraps EvalResult
+  // own key rather than sharing evalBundle's - that bundle wraps EvalResult
   // in {evalResult, confusion, coverageCurve} and two shapes must never land
   // under the same cache key.
   eval: (runId: string | undefined) => ["run", runId, "eval"] as const,

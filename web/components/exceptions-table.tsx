@@ -70,9 +70,9 @@ async function fetchDetails(ids: string[]): Promise<Record<string, RowDetail>> {
   ids.forEach((id, i) => {
     const firstEvent = evidences[i].data?.events?.[0];
     out[id] = {
-      counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "—",
+      counterparty: firstEvent?.counterparty ?? firstEvent?.source ?? "-",
       source: firstEvent?.source ?? "razorpay",
-      reference: firstEvent?.utr ?? firstEvent?.settlement_id ?? firstEvent?.order_id ?? firstEvent?.voucher_number ?? "—",
+      reference: firstEvent?.utr ?? firstEvent?.settlement_id ?? firstEvent?.order_id ?? firstEvent?.voucher_number ?? "-",
     };
   });
   return out;
@@ -307,7 +307,7 @@ export function ExceptionsTable({
                       <td className="td num text-[11.5px] text-ink-3">{detail ? detail.reference : <span className="skeleton inline-block h-3 w-28 align-middle" />}</td>
                       <td className="td num text-right text-[15px] font-medium text-ink">{formatPaise(row.exception.residual_paise)}</td>
                       <td className="td num text-right text-[12.5px] text-ink-3">
-                        {row.exception.confidence ? formatDecimalPercent(row.exception.confidence) : "—"}
+                        {row.exception.confidence ? formatDecimalPercent(row.exception.confidence) : "-"}
                       </td>
                       <td className="td pr-4 text-right">
                         <Pill tone={TIER_TONE[tier]} dot>

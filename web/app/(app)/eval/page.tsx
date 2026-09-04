@@ -99,15 +99,15 @@ export default function EvaluationPage() {
                 <div className="grid grid-cols-3 gap-3">
                   <div>
                     <div className="label">Precision</div>
-                    <div className="num mt-2 text-[22px] font-semibold">{evalResult.precision_pct != null ? formatPercent(Number(evalResult.precision_pct)) : "—"}</div>
+                    <div className="num mt-2 text-[22px] font-semibold">{evalResult.precision_pct != null ? formatPercent(Number(evalResult.precision_pct)) : "-"}</div>
                   </div>
                   <div>
                     <div className="label">Recall</div>
-                    <div className="num mt-2 text-[22px] font-semibold">{evalResult.recall_pct != null ? formatPercent(Number(evalResult.recall_pct)) : "—"}</div>
+                    <div className="num mt-2 text-[22px] font-semibold">{evalResult.recall_pct != null ? formatPercent(Number(evalResult.recall_pct)) : "-"}</div>
                   </div>
                   <div>
                     <div className="label">Abstained</div>
-                    <div className="num mt-2 text-[22px] font-semibold text-ink-2">{evalResult.abstention_pct != null ? formatPercent(Number(evalResult.abstention_pct)) : "—"}</div>
+                    <div className="num mt-2 text-[22px] font-semibold text-ink-2">{evalResult.abstention_pct != null ? formatPercent(Number(evalResult.abstention_pct)) : "-"}</div>
                   </div>
                 </div>
                 <p className="mt-3 border-t border-line pt-2.5 text-[11px] text-ink-3">

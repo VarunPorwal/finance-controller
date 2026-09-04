@@ -133,7 +133,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
       label: "Amount",
       value:
         latest.scope.amount_min_paise != null || latest.scope.amount_max_paise != null
-          ? `${latest.scope.amount_min_paise != null ? formatPaise(latest.scope.amount_min_paise) : "—"} to ${latest.scope.amount_max_paise != null ? formatPaise(latest.scope.amount_max_paise) : "—"}`
+          ? `${latest.scope.amount_min_paise != null ? formatPaise(latest.scope.amount_min_paise) : "-"} to ${latest.scope.amount_max_paise != null ? formatPaise(latest.scope.amount_max_paise) : "-"}`
           : "Any",
     },
     { label: "Effective", value: `${latest.effective_from}${latest.effective_to ? ` to ${latest.effective_to}` : " onwards"}` },
@@ -316,7 +316,7 @@ export default function RuleDetailPage({ params }: { params: Promise<{ id: strin
                 </div>
                 <div className="mt-3.5 flex flex-wrap items-center gap-5 border-t border-line pt-3 text-[12.5px]">
                   <span className="text-ink-3">
-                    Precision <span className="num ml-1 text-[15px] font-semibold text-ink">{backtest.precision_pct != null ? formatPercent(Number(backtest.precision_pct)) : "—"}</span>
+                    Precision <span className="num ml-1 text-[15px] font-semibold text-ink">{backtest.precision_pct != null ? formatPercent(Number(backtest.precision_pct)) : "-"}</span>
                   </span>
                   <span className="text-ink-3">
                     Coverage <span className="num ml-1 text-[15px] font-semibold text-ink">{formatPercent(Number(backtest.coverage_pct))}</span>

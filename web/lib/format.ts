@@ -1,5 +1,5 @@
 // Presentation only. CLAUDE.md: "the frontend never computes a financial
-// number" — every figure below is already computed server-side as integer
+// number" - every figure below is already computed server-side as integer
 // paise; these functions render that integer, they never derive a new one
 // (no rounding, no percentage math, no summing).
 
@@ -14,7 +14,7 @@ export function formatPaise(paise: number): string {
   return `${sign}₹${formatted}`;
 }
 
-/** Integer paise -> "₹5,04,200", Indian digit grouping, no decimal places —
+/** Integer paise -> "₹5,04,200", Indian digit grouping, no decimal places -
  * the design handoff's convention for every amount outside the evidence pack. */
 export function formatPaiseWhole(paise: number): string {
   const rupees = Math.round(paise / 100);
@@ -56,7 +56,7 @@ export function formatPercent(fraction: number): string {
 }
 
 /** A server-supplied Decimal, serialised as a JSON string (e.g. `confidence`,
- * `priority_score`) — parsed for display only, never for a decision. */
+ * `priority_score`) - parsed for display only, never for a decision. */
 export function formatDecimalPercent(value: string): string {
   return formatPercent(Number(value));
 }

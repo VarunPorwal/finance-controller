@@ -37,7 +37,7 @@ async function fetchRunSummary(): Promise<RunSummary> {
 /**
  * Loads the most recent run's summary once, at the app shell, so the header
  * strip and every tab share one fetch instead of each re-deriving "which run
- * is this" on its own. `refresh()` invalidates the entire query cache — it
+ * is this" on its own. `refresh()` invalidates the entire query cache - it
  * is the single call site every action that completes a run (ingest
  * finalize, demo corpus, replay) routes through, so a completed run
  * propagates to exceptions/rules/cash/eval/etc. without each of them

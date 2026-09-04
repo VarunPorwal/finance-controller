@@ -57,8 +57,8 @@ export function ReplayDiff({ currentRunId }: { currentRunId: string }) {
   }
 
   function line(d: DecisionDiff) {
-    const before = d.before ? `${humanizeSnakeCase(d.before.category)} (${formatPaise(d.before.residual_paise)})` : "—";
-    const after = d.after ? `${humanizeSnakeCase(d.after.category)} (${formatPaise(d.after.residual_paise)})` : "—";
+    const before = d.before ? `${humanizeSnakeCase(d.before.category)} (${formatPaise(d.before.residual_paise)})` : "-";
+    const after = d.after ? `${humanizeSnakeCase(d.after.category)} (${formatPaise(d.after.residual_paise)})` : "-";
     return { before, after };
   }
 

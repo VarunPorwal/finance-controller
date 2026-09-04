@@ -6,7 +6,7 @@
  * exports: a page module may export a default component and a fixed list of
  * route config symbols, and *nothing else*. Exporting a loader beside the
  * component fails the production build with "Property 'fetch...Bundle' is
- * incompatible with index signature" — a real constraint, not a lint opinion,
+ * incompatible with index signature" - a real constraint, not a lint opinion,
  * so the loaders move out and both the page and the shell import them.
  */
 

@@ -18,7 +18,7 @@ const cascadeStyle = (i: number) => ({ "--i": i }) as CSSProperties;
 /**
  * Live figures for the landing page. Where a design shows a number, the
  * real one from the API is used, never a mock. When the API is unreachable
- * the slots read "—" and say so.
+ * the slots read "-" and say so.
  */
 export function LiveStats() {
   const { summary, loading, error } = useRun();
@@ -78,12 +78,12 @@ export function LiveBridge() {
   if (!bridge) {
     return (
       <pre className="tree m-frame p-6 text-ink-4">
-        {`GROSS COLLECTED                                     —
-  ├─ deductions, per rule, per row               —
-  └─ EXPECTED NET                                     —
-       vs BANK CREDITED                                —
+        {`GROSS COLLECTED                                     -
+  ├─ deductions, per rule, per row               -
+  └─ EXPECTED NET                                     -
+       vs BANK CREDITED                                -
        ─────────────────────────────────────────────────
-       UNEXPLAINED                                     —`}
+       UNEXPLAINED                                     -`}
       </pre>
     );
   }
@@ -147,11 +147,11 @@ export function LiveProof() {
   if (!evidenceList || evidenceList.length === 0) {
     return (
       <pre className="tree m-frame p-6 text-ink-4">
-        {`missing_in_bank · 1 event · residual —
-├─ stage fee_adjusted  held  confidence —
+        {`missing_in_bank · 1 event · residual -
+├─ stage fee_adjusted  held  confidence -
 │  └─ agreed amount, date · disagreed reference
-│     base — → result —
-└─ rule — v—  explained —`}
+│     base - → result -
+└─ rule - v-  explained -`}
       </pre>
     );
   }
@@ -181,7 +181,7 @@ export function LiveGates() {
     { name: "precision", threshold: "== 100%" },
     { name: "determinism", threshold: "byte-identical" },
   ];
-  const rows = gates.length ? gates : fallback.map((g) => ({ ...g, passed: null as boolean | null, actual: "—" }));
+  const rows = gates.length ? gates : fallback.map((g) => ({ ...g, passed: null as boolean | null, actual: "-" }));
   return (
     <ul className="m-frame divide-y divide-[rgba(255,255,255,0.06)]">
       {rows.map((g, i) => (

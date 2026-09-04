@@ -36,9 +36,9 @@ export default function ControllerActivityPage() {
       <PageHeader title="Controller Activity" sub="What the agent evaluated, matched and escalated, and every model call it made doing so." />
 
       <div className="grid grid-cols-3 gap-4">
-        <Stat label="Runs today" value={data ? formatCount(data.runsToday) : "—"} />
-        <Stat label="Rules in play" value={data ? formatCount(data.activeRuleCount) : "—"} sub="active in the rule book" />
-        <Stat label="Avg run time" value={data?.avgRuntimeMs != null ? formatDurationMs(data.avgRuntimeMs) : "—"} sub="across completed runs" />
+        <Stat label="Runs today" value={data ? formatCount(data.runsToday) : "-"} />
+        <Stat label="Rules in play" value={data ? formatCount(data.activeRuleCount) : "-"} sub="active in the rule book" />
+        <Stat label="Avg run time" value={data?.avgRuntimeMs != null ? formatDurationMs(data.avgRuntimeMs) : "-"} sub="across completed runs" />
       </div>
 
       <RunProgressStrip runId={runId} />
@@ -104,7 +104,7 @@ export default function ControllerActivityPage() {
                   </div>
                   <div className="num flex flex-none items-center gap-3 text-[11px] text-ink-3">
                     <span>{(c.input_tokens ?? 0) + (c.output_tokens ?? 0)} tok</span>
-                    <span>{c.latency_ms != null ? `${c.latency_ms} ms` : "—"}</span>
+                    <span>{c.latency_ms != null ? `${c.latency_ms} ms` : "-"}</span>
                     <span className={cn("font-semibold", c.outcome === "ok" ? "text-ok" : "text-warn")}>{c.outcome}</span>
                   </div>
                 </li>

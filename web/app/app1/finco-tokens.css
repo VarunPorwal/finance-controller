@@ -828,3 +828,11 @@ a.fc-plain-link:hover {
     z-index: auto;
   }
 }
+
+/* .fc-btn sets display in unlayered CSS, which beats Tailwind's layered md:hidden,
+   so the drawer toggle needs its own unlayered rule to leave at md and up. */
+@media (min-width: 768px) {
+  .a1-nav-toggle {
+    display: none;
+  }
+}

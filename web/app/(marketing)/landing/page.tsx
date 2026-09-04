@@ -12,7 +12,7 @@ import type { CSSProperties } from "react";
 const cascadeStyle = (i: number) => ({ "--i": i }) as CSSProperties;
 
 export const metadata: Metadata = {
-  title: "Finco — close the books on proof, not confidence",
+  title: "Finco: close the books on proof, not confidence",
 };
 
 function Brand() {

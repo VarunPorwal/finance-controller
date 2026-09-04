@@ -22,7 +22,7 @@ export function Topbar() {
     >
       <button
         onClick={() => setSidebarOpen(true)}
-        className="fc-btn shrink-0 md:hidden"
+        className="fc-btn a1-nav-toggle shrink-0 md:hidden"
         style={{ padding: "6px 8px" }}
         aria-label="Open navigation"
       >

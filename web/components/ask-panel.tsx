@@ -248,7 +248,7 @@ function ResultTable({ rows }: { rows: Record<string, unknown>[] }) {
             <tr key={i}>
               {columns.map((c) => (
                 <td key={c} className="td num whitespace-nowrap text-ink">
-                  {String(row[c] ?? "—")}
+                  {String(row[c] ?? "-")}
                 </td>
               ))}
             </tr>

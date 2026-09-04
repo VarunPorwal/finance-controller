@@ -8,7 +8,7 @@ export type Run = { text: string; className?: string };
 
 /**
  * Types a list of styled runs out character by character, once, the first
- * time it scrolls into view — so the bridge reads as a live terminal
+ * time it scrolls into view - so the bridge reads as a live terminal
  * producing the number, not a static printout that just fades in. Retypes
  * whenever `runs` changes (a new run of the reconciliation).
  */
@@ -29,7 +29,7 @@ export function TypedTree({ runs, className }: { runs: Run[]; className?: string
     // The bridge data (and so this component) can mount after the user has
     // already scrolled to it, in which case it's on-screen from its very
     // first frame and there is no "enters the viewport" event left to wait
-    // for. Check synchronously at mount, then again on scroll — don't rely
+    // for. Check synchronously at mount, then again on scroll - don't rely
     // on IntersectionObserver alone, since its first callback isn't
     // guaranteed to land promptly on every host.
     if (isOnScreen()) {

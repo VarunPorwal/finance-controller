@@ -2,6 +2,7 @@ import {
   Activity,
   ArrowLeftRight,
   BookOpen,
+  Compass,
   Landmark,
   LayoutDashboard,
   ShieldCheck,
@@ -33,6 +34,7 @@ export const NAV_SECONDARY: NavItem[] = [
   { href: "/activity", label: "Controller Activity", icon: Activity, hint: "What the agent did, and why" },
   { href: "/audit", label: "Audit Trail", icon: ShieldCheck, hint: "Every decision, hash-chained" },
   { href: "/records", label: "Records", icon: Table2, hint: "Normalised rows from every source" },
+  { href: "/guide", label: "Guide", icon: Compass, hint: "What this is and how to walk through it" },
 ];
 
 /** Reachable from the command bar and in-page links, not the sidebar. */

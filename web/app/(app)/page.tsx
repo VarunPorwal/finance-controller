@@ -231,16 +231,16 @@ export default function OverviewPage() {
           <div className="mt-2 grid grid-cols-3 gap-3 border-t border-line pt-3">
             <div>
               <div className="label">Precision</div>
-              <div className="num mt-1 text-[15px] text-ink">{evalResult?.precision_pct != null ? formatPercent(Number(evalResult.precision_pct)) : "—"}</div>
+              <div className="num mt-1 text-[15px] text-ink">{evalResult?.precision_pct != null ? formatPercent(Number(evalResult.precision_pct)) : "-"}</div>
             </div>
             <div>
               <div className="label">Recall</div>
-              <div className="num mt-1 text-[15px] text-ink">{evalResult?.recall_pct != null ? formatPercent(Number(evalResult.recall_pct)) : "—"}</div>
+              <div className="num mt-1 text-[15px] text-ink">{evalResult?.recall_pct != null ? formatPercent(Number(evalResult.recall_pct)) : "-"}</div>
             </div>
             <div>
               <div className="label">False auto-closes</div>
               <div className={"num mt-1 text-[15px] " + (evalResult ? (evalResult.false_auto_resolutions === 0 ? "text-ok" : "text-bad") : "text-ink-3")}>
-                {evalResult ? evalResult.false_auto_resolutions : "—"}
+                {evalResult ? evalResult.false_auto_resolutions : "-"}
               </div>
             </div>
           </div>

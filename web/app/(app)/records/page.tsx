@@ -95,10 +95,10 @@ export default function RecordsPage() {
                       </span>
                     </td>
                     <td className="td num max-w-[260px] truncate text-[11.5px] text-ink-2" title={e.raw_narration ?? undefined}>
-                      {e.utr ?? e.settlement_id ?? e.voucher_number ?? e.order_id ?? "—"}
+                      {e.utr ?? e.settlement_id ?? e.voucher_number ?? e.order_id ?? "-"}
                     </td>
-                    <td className="td max-w-[200px] truncate text-ink-2">{e.counterparty ?? "—"}</td>
-                    <td className="td text-ink-3 uppercase">{e.rail ?? e.method ?? "—"}</td>
+                    <td className="td max-w-[200px] truncate text-ink-2">{e.counterparty ?? "-"}</td>
+                    <td className="td text-ink-3 uppercase">{e.rail ?? e.method ?? "-"}</td>
                     <td className="td num text-right text-[15px] font-medium">{formatPaise(e.amount_paise)}</td>
                     <td className="td pr-[18px] text-right">
                       <Pill tone={e.direction === "credit" ? "ok" : "neutral"}>{e.direction}</Pill>
