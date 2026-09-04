@@ -14,7 +14,6 @@ run, and so a judge can watch an email arrive.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import UTC, datetime
 
@@ -220,7 +219,10 @@ async def send_run_summary(
     finished = run.finished_at or run.started_at
     if deadlines:
         days = (min(deadlines) - finished.date()).days
-        headline += f", first deadline in {days} day{'s' if days != 1 else ''}"
+        if days < 0:
+            headline += f", first deadline overdue by {-days} day{'s' if days != -1 else ''}"
+        else:
+            headline += f", first deadline in {days} day{'s' if days != 1 else ''}"
 
     top = sorted(exceptions, key=lambda e: e.amount_paise, reverse=True)[:5]
     top_exceptions: list[dict[str, object]] = [
@@ -234,23 +236,28 @@ async def send_run_summary(
         reason = "no RESEND_API_KEY configured; nothing was sent"
     elif not recipients:
         reason = "no recipient: set an address in Settings"
-    sent = reason is None and not dry_run
+    sent = False
+    if reason is None and not dry_run:
+        # Awaited, not fired and forgotten: this is the button a person
+        # presses to see an email arrive, so the answer has to be Resend's,
+        # not "the task was scheduled". The automatic run-complete email
+        # stays fire-and-forget; here a 403 from Resend must reach the
+        # screen. The send is bounded by notify's own timeout.
+        reason = await notify_run_complete(
+            cfg,
+            run_id=run_id,
+            headline=headline,
+            records_processed=event_count,
+            settled_automatically=settled_automatically,
+            needing_attention=needing_attention,
+            false_auto_resolutions=false_auto,
+            top_exceptions=top_exceptions,
+            app_url=cfg.frontend_origin or "http://localhost:3000",
+            to=recipients,
+        )
+        sent = reason is None
 
     if sent:
-        asyncio.create_task(
-            notify_run_complete(
-                cfg,
-                run_id=run_id,
-                headline=headline,
-                records_processed=event_count,
-                settled_automatically=settled_automatically,
-                needing_attention=needing_attention,
-                false_auto_resolutions=false_auto,
-                top_exceptions=top_exceptions,
-                app_url=cfg.frontend_origin or "http://localhost:3000",
-                to=recipients,
-            )
-        )
         settings[_EMAIL_LAST_SENT_KEY] = datetime.now(UTC).isoformat()
         tenant.settings = settings
         await session.flush()

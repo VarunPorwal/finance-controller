@@ -52,10 +52,27 @@ _LOG = logging.getLogger("fc.notify")
 _SEND_TIMEOUT_SECONDS = 10.0
 
 
+#: Resend's shared test sender (``onboarding@resend.dev``) delivers only to
+#: the address that owns the Resend account. Every other recipient is
+#: rejected with this phrase, and the fix is on the account, not in code.
+_TEST_SENDER_HINT = (
+    " Resend's test sender only delivers to the address that owns the Resend"
+    " account. Either send to that address, or verify a domain in Resend and"
+    " set NOTIFY_FROM to an address on it."
+)
+
+
 async def _send(
     cfg: Config, *, subject: str, html_body: str, to: str | Sequence[str] | None = None
-) -> None:
-    """The one call site that talks to Resend. Never raises."""
+) -> str | None:
+    """The one call site that talks to Resend. Never raises.
+
+    Returns ``None`` when Resend accepted the email, otherwise a short
+    reason. Fire-and-forget callers ignore it; the on-demand "send now"
+    endpoint reports it, because "Sent" on screen while Resend said 403 in
+    the server log is how a working button stopped working without anyone
+    noticing.
+    """
     if isinstance(to, str):
         recipients = [to]
     elif to:
@@ -65,10 +82,10 @@ async def _send(
 
     if not cfg.resend_api_key:
         _LOG.info("notify skipped (no RESEND_API_KEY configured): %s", subject)
-        return
+        return "no RESEND_API_KEY configured"
     if not recipients:
         _LOG.info("notify skipped (no recipient configured): %s", subject)
-        return
+        return "no recipient configured"
 
     resend.api_key = cfg.resend_api_key
     try:
@@ -81,8 +98,16 @@ async def _send(
                     "html": html_body,
                 }
             )
-    except Exception:  # noqa: BLE001 - fire-and-forget: log every failure, propagate none
+    except TimeoutError:
+        _LOG.error("notify timed out after %.0fs (subject=%r)", _SEND_TIMEOUT_SECONDS, subject)
+        return f"Resend did not answer within {_SEND_TIMEOUT_SECONDS:.0f} seconds"
+    except Exception as exc:  # noqa: BLE001 - fire-and-forget: log every failure, propagate none
         _LOG.exception("notify failed (subject=%r, recipients=%r)", subject, recipients)
+        reason = f"Resend rejected the email: {exc}"
+        if "testing emails" in str(exc) or "own email address" in str(exc):
+            reason += _TEST_SENDER_HINT
+        return reason
+    return None
 
 
 async def notify_escalation(
@@ -152,12 +177,13 @@ async def notify_run_complete(
     top_exceptions: Sequence[dict[str, object]],
     app_url: str,
     to: str | Sequence[str] | None = None,
-) -> None:
+) -> str | None:
     """The "email me when a run finishes" toggle (Reconcile screen).
 
     ``top_exceptions`` entries carry ``category`` (str), ``amount_paise``
     (int) and ``deadline`` (``date | None``) — the top 5 by amount, already
-    selected by the caller; this function only renders them.
+    selected by the caller; this function only renders them. Returns what
+    :func:`_send` returns: ``None`` on success, else the reason.
     """
     rows = "".join(
         f"<tr><td>{html.escape(str(item.get('category', '')))}</td>"
@@ -165,7 +191,7 @@ async def notify_run_complete(
         f"<td>{html.escape(str(item['deadline'])) if item.get('deadline') else '—'}</td></tr>"
         for item in top_exceptions
     )
-    await _send(
+    return await _send(
         cfg,
         subject=f"Reconciliation complete — {html.escape(headline)}",
         html_body=(
