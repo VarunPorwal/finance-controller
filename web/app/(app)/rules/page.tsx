@@ -1,370 +1,392 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
-import { ArrowRight, Plus, Sparkles, Upload } from "lucide-react";
-import { apiClient, type components } from "@/lib/client";
-import { formatPaise, humanizeSnakeCase } from "@/lib/format";
-import { queryKeys } from "@/lib/query-keys";
-import { PageHeader } from "@/components/page-header";
-import { Segmented } from "@/components/ui/segmented";
-import { Pill } from "@/components/ui/pill";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
-import { RuleAuthoringForm, type RuleSubmitPayload } from "@/components/rule-authoring-form";
-import { BacktestDialog } from "@/components/backtest-dialog";
-import { cn } from "@/lib/utils";
-import { fetchRulesAndSuggestions, type BacktestOut, type Rule, type SuggestionOut } from "./loader";
+// Rule Book. "Why did Finco calculate this amount this way?" Every deduction
+// the system applies is a named, versioned rule; this screen shows what each
+// one does, what it did in this run, and who put it there. Reskinned to the
+// Finco design system — see `finco-tokens.css` and `_components/fc-ui.tsx`.
 
-const FILTERS = [
-  { value: "all", label: "All" },
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, Plus, Search } from "lucide-react";
+import {
+  useCurrentRun,
+  useExceptions,
+  useRules,
+  useRuleSets,
+  useSuggestions,
+  errorMessage,
+  type Rule,
+} from "../_lib/api";
+import { money, plural } from "../_lib/format";
+import { FcCard, FcErrorNote, FcHead, FcPage, FcSkeleton, WhyLabel, WhyWrap } from "../_components/fc-ui";
+import { CountUp } from "../_components/motion";
+import { SuggestionsInbox } from "./suggestions";
+import { RuleCard } from "./cards";
+import { RuleDetail } from "./detail";
+import { AuthorRule } from "./author";
+import { GENERAL, groupRules, latestPerRule, matchesSearch, ruleUsage } from "./shared";
+
+/** One figure in the compact header strip: label above, value below, a
+ * 1px divider rule between items instead of separate cards. */
+function StripItem({
+  label,
+  first,
+  title,
+  children,
+}: {
+  label: string;
+  first?: boolean;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="flex flex-col justify-center"
+      title={title}
+      style={{ padding: `0 20px 0 ${first ? 0 : 20}px`, borderLeft: first ? undefined : "1px solid var(--fc-divider)" }}
+    >
+      <div style={{ fontSize: 11, color: "var(--fc-text-3)" }}>{label}</div>
+      <div className="fc-num" style={{ fontSize: 18, fontWeight: 500, marginTop: 2 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+type Status = Rule["status"];
+const STATUSES: { value: Status; label: string }[] = [
   { value: "active", label: "Active" },
   { value: "draft", label: "Draft" },
   { value: "retired", label: "Retired" },
 ];
 
-const STATUS_TONE: Record<Rule["status"], "ok" | "neutral" | "warn"> = { active: "ok", draft: "neutral", retired: "warn" };
+export default function RulesPage() {
+  const { run, runId } = useCurrentRun();
+  const rules = useRules();
+  const sets = useRuleSets();
+  const suggestions = useSuggestions();
+  const exceptions = useExceptions(runId);
 
-export default function RuleBookPage() {
-  const queryClient = useQueryClient();
-  const { data } = useQuery({ queryKey: queryKeys.rules({}), queryFn: fetchRulesAndSuggestions });
-  const rules = data?.rules ?? null;
-  const suggestions: SuggestionOut[] = data?.suggestions ?? [];
-  const [status, setStatus] = useState("all");
-  const [creating, setCreating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [pendingBacktest, setPendingBacktest] = useState<{ ruleId: string; version: number; name: string } | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [importMessage, setImportMessage] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [actingId, setActingId] = useState<string | null>(null);
+  const [ruleSet, setRuleSet] = useState<string>("all");
+  const [ruleSetTouched, setRuleSetTouched] = useState(false);
+  const [status, setStatus] = useState<Status | null>(null);
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const GROUP_PREVIEW_COUNT = 3;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [created, setCreated] = useState<Rule | null>(null);
+  const [promptBacktest, setPromptBacktest] = useState(false);
+  const [authoring, setAuthoring] = useState(false);
+  const groupsRef = useRef<HTMLDivElement>(null);
 
-  function reload() {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.rules({}) });
-  }
+  const latest = useMemo(() => latestPerRule(rules.data), [rules.data]);
+  const usage = useMemo(() => ruleUsage(exceptions.data), [exceptions.data]);
 
-  async function activateInline(rule: Rule) {
-    const key = `${rule.rule_id}:${rule.version}`;
-    setActingId(key);
-    await apiClient.POST("/api/v1/rules/{rule_id}/activate", {
-      params: { path: { rule_id: rule.rule_id }, query: { version: rule.version } },
-      body: { reason: "Activated from Rule Book" },
-    });
-    setActingId(null);
-    reload();
-  }
-
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  async function deleteInline(rule: Rule) {
-    const key = `${rule.rule_id}:${rule.version}`;
-    setConfirmDeleteId(null);
-    setActingId(key);
-    await apiClient.DELETE("/api/v1/rules/{rule_id}/versions/{version}", {
-      params: { path: { rule_id: rule.rule_id, version: rule.version } },
-    });
-    setActingId(null);
-    reload();
-  }
-
-  async function importRulesFile(file: File) {
-    setImporting(true);
-    setImportMessage(null);
-    try {
-      const text = await file.text();
-      let entries: unknown;
-      try {
-        entries = JSON.parse(text);
-      } catch {
-        setImportMessage({ tone: "bad", text: "Not valid JSON." });
-        return;
-      }
-      if (!Array.isArray(entries)) {
-        setImportMessage({ tone: "bad", text: "Expected a JSON list of rules." });
-        return;
-      }
-      const { data: out, error } = await apiClient.POST("/api/v1/rules/import", { body: entries as Record<string, unknown>[] });
-      if (error || !out) {
-        const detail = error && typeof error === "object" && "detail" in error ? String((error as { detail?: unknown }).detail) : "Import failed.";
-        setImportMessage({ tone: "bad", text: detail });
-        return;
-      }
-      const versionAdds = out.results.filter((r) => r.outcome === "created_version").length;
-      setImportMessage({
-        tone: "ok",
-        text: `Imported ${out.created_count} draft${out.created_count === 1 ? "" : "s"}${versionAdds ? ` (${versionAdds} as a new version of an existing rule)` : ""}. Back-test and activate each from here.`,
-      });
-      reload();
-    } finally {
-      setImporting(false);
+  // The rule set this run actually applied: the scope.rule_set of every rule
+  // that fired at least once. A run only ever applies one rulebook, so if
+  // more than one name shows up here the run can't be attributed and the
+  // filter falls back to "all" rather than guessing.
+  const currentRunRuleSet = useMemo(() => {
+    const names = new Set<string>();
+    for (const r of latest) {
+      const u = usage.get(r.rule_id);
+      if (u && u.fired > 0 && r.scope.rule_set) names.add(r.scope.rule_set);
     }
-  }
+    return names.size === 1 ? [...names][0] : null;
+  }, [latest, usage]);
 
-  const latest = useMemo(() => {
-    if (!rules) return [] as Rule[];
-    const map = new Map<string, Rule>();
-    for (const r of rules) {
-      const existing = map.get(r.rule_id);
-      if (!existing || r.version > existing.version) map.set(r.rule_id, r);
+  // Default the filter to the run's own rule set, once it's known, unless
+  // the person has already picked something themselves.
+  useEffect(() => {
+    if (!ruleSetTouched && currentRunRuleSet && ruleSet === "all") setRuleSet(currentRunRuleSet);
+  }, [currentRunRuleSet, ruleSetTouched, ruleSet]);
+
+  const explicitAllSets = ruleSet === "all" && ruleSetTouched;
+
+  const inSet = useMemo(
+    () => (ruleSet === "all" ? latest : latest.filter((r) => r.scope.rule_set === ruleSet)),
+    [latest, ruleSet],
+  );
+
+  const counts = useMemo(() => {
+    const c: Record<Status, number> = { active: 0, draft: 0, retired: 0 };
+    for (const r of inSet) c[r.status] += 1;
+    return c;
+  }, [inSet]);
+
+  const headerStats = useMemo(() => {
+    let fired = 0;
+    let explained = 0;
+    for (const r of inSet) {
+      const u = usage.get(r.rule_id);
+      if (u && u.fired > 0) {
+        fired += 1;
+        explained += u.explained;
+      }
     }
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [rules]);
+    return { count: inSet.length, fired, explained };
+  }, [inSet, usage]);
 
-  const [setFilter, setSetFilter] = useState<string | null>(null);
-  const { data: ruleSets } = useQuery({
-    queryKey: ["rules", "sets"],
-    queryFn: async () => (await apiClient.GET("/api/v1/rules/sets")).data ?? [],
-  });
+  const visible = useMemo(
+    () => inSet.filter((r) => (status ? r.status === status : true) && matchesSearch(r, search)),
+    [inSet, status, search],
+  );
+  const groups = useMemo(() => groupRules(visible), [visible]);
 
-  // A back-test figure, not a live count: how many already-resolved or
-  // written-off exceptions this rule would have explained.
-  const { data: affected = {} } = useQuery({
-    queryKey: ["rules", "affected", latest.map((r) => `${r.rule_id}:${r.version}`)],
-    queryFn: async () => {
-      const results = await Promise.all(
-        latest.map((r) =>
-          apiClient
-            .POST("/api/v1/rules/{rule_id}/backtest", { params: { path: { rule_id: r.rule_id }, query: { version: r.version } } })
-            .then((res) => [r.rule_id, res.data] as const),
-        ),
-      );
-      const map: Record<string, BacktestOut> = {};
-      for (const [id, d] of results) if (d) map[id] = d;
-      return map;
-    },
-    enabled: latest.length > 0,
-  });
+  const selected = selectedId
+    ? (latest.find((r) => r.rule_id === selectedId) ?? (created?.rule_id === selectedId ? created : null))
+    : null;
 
-  async function createRule(payload: RuleSubmitPayload) {
-    setSubmitting(true);
-    const { data: created } = await apiClient.POST("/api/v1/rules", { body: payload });
-    setSubmitting(false);
-    if (!created) return;
-    setCreating(false);
-    reload();
-    setPendingBacktest({ ruleId: created.rule_id, version: created.version, name: created.name });
-  }
+  const ruleSetNames = (sets.data ?? []).map((s) => s.name);
 
-  const filtered = latest.filter((r) => status === "all" || r.status === status);
-  const counts = {
-    all: latest.length,
-    active: latest.filter((r) => r.status === "active").length,
-    draft: latest.filter((r) => r.status === "draft").length,
-    retired: latest.filter((r) => r.status === "retired").length,
-  };
+  const toggleGroup = (g: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(g)) next.delete(g);
+      else next.add(g);
+      return next;
+    });
 
   return (
-    <div className="flex flex-col gap-5">
-      <PageHeader
+    <FcPage>
+      <FcHead
         title="Rule Book"
-        sub="Deduction and settlement policy, encoded. A rule shrinks an exception; it never passes or fails one. Versions are immutable."
         actions={
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = "";
-                if (file) void importRulesFile(file);
-              }}
-            />
-            <Button icon={<Upload width={13} height={13} />} disabled={importing} onClick={() => fileInputRef.current?.click()}>
-              {importing ? "Importing…" : "Import JSON"}
-            </Button>
-            <Button variant="primary" icon={<Plus width={13} height={13} />} onClick={() => setCreating((c) => !c)}>
-              {creating ? "Close editor" : "Create rule"}
-            </Button>
-          </>
+          <button className="fc-btn" onClick={() => setAuthoring(true)}>
+            <Plus size={14} />
+            Create rule
+          </button>
         }
       />
 
-      {importMessage && (
-        <div className={cn("rounded-[8px] border px-4 py-2.5 text-[12.5px]", importMessage.tone === "ok" ? "border-[rgba(61,220,151,0.3)] bg-ok-soft text-ok" : "border-[rgba(255,107,107,0.3)] bg-bad-soft text-bad")}>
-          {importMessage.text}
+      {rules.data && (
+        <div className="mb-6 flex items-stretch" style={{ height: 52 }}>
+          <StripItem
+            label="Rules in view"
+            first
+            title={ruleSet === "all" ? "across all rule sets" : `in ${ruleSet}`}
+          >
+            <CountUp value={headerStats.count} />
+            {explicitAllSets && (
+              <span className="fc-faint" style={{ fontSize: 12, fontWeight: 400 }}>
+                {" "}
+                (all sets)
+              </span>
+            )}
+          </StripItem>
+          <StripItem label="Fired this run" title={`${plural(headerStats.count - headerStats.fired, "rule")} never fired`}>
+            <CountUp value={headerStats.fired} />
+          </StripItem>
+          <StripItem label="Explained" title="deducted by rules that fired">
+            <WhyWrap>
+              <span className="fc-why-figure" style={{ color: "var(--fc-ok)" }}>
+                <CountUp value={headerStats.explained} format={(n) => money(Math.round(n))} />
+              </span>
+              <WhyLabel onClick={() => groupsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+            </WhyWrap>
+          </StripItem>
         </div>
       )}
 
-      {creating && <RuleAuthoringForm onSubmit={createRule} submitting={submitting} />}
+      {suggestions.data && suggestions.data.length > 0 && <SuggestionsInbox suggestions={suggestions.data} />}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Segmented
-          active={status}
-          onChange={setStatus}
-          options={FILTERS.map((f) => ({ ...f, count: counts[f.value as keyof typeof counts] }))}
-        />
-        {(ruleSets ?? []).length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="label mr-1">Rule set</span>
-            <button
-              type="button"
-              onClick={() => setSetFilter(null)}
-              className={cn("rounded-[6px] border px-2.5 py-1 text-[11.5px]", setFilter === null ? "border-accent-strong bg-accent-soft text-accent" : "border-line-strong text-ink-2")}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="fc-muted" style={{ fontSize: 12.5 }}>
+            Rule set
+          </span>
+          <div className="relative inline-flex items-center">
+            <select
+              value={ruleSet}
+              onChange={(e) => {
+                setRuleSetTouched(true);
+                setRuleSet(e.target.value);
+              }}
+              className="fc-num"
+              style={{
+                appearance: "none",
+                background: "var(--fc-hover)",
+                border: "1px solid var(--fc-border)",
+                color: "var(--fc-text)",
+                borderRadius: 8,
+                padding: "6px 26px 6px 10px",
+                fontSize: 12.5,
+              }}
             >
-              All
-            </button>
-            {(ruleSets ?? []).map((s) => (
-              <button
-                key={s.name}
-                type="button"
-                onClick={() => setSetFilter(s.name)}
-                title={`${s.active_rule_count} active of ${s.rule_count}`}
-                className={cn("num rounded-[6px] border px-2.5 py-1 text-[11.5px]", setFilter === s.name ? "border-accent-strong bg-accent-soft text-accent" : "border-line-strong text-ink-2")}
-              >
-                {s.name} <span className="text-ink-3">{s.active_rule_count}/{s.rule_count}</span>
-              </button>
-            ))}
+              <option value="all">All rule sets</option>
+              {ruleSetNames.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={13} className="fc-faint pointer-events-none absolute right-2" />
           </div>
-        )}
+        </div>
+        <div className="relative">
+          <Search size={13} className="fc-faint pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search rule name, id, counterparty"
+            className="fc-num"
+            style={{
+              background: "var(--fc-hover)",
+              border: "1px solid var(--fc-border)",
+              color: "var(--fc-text)",
+              borderRadius: 8,
+              padding: "6px 10px 6px 28px",
+              fontSize: 12.5,
+              width: 260,
+            }}
+          />
+        </div>
       </div>
 
-      {!rules && (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-[220px]" />
-          ))}
-        </div>
-      )}
-
-      {rules && filtered.length === 0 && suggestions.length === 0 && (
-        <EmptyState
-          title="No rules under this filter"
-          note="Create one, or import a rulebook JSON. Every rule is born a draft and only a back-test can activate it."
-          action={
-            <Button variant="primary" icon={<Plus width={13} height={13} />} onClick={() => setCreating(true)}>
-              Create rule
-            </Button>
-          }
-        />
-      )}
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {filtered.map((rule) => {
-          const bt = affected[rule.rule_id];
-          const key = `${rule.rule_id}:${rule.version}`;
-          const busy = actingId === key;
-          const inSelectedSet = setFilter === null || (rule.scope.rule_set ?? "default") === setFilter;
-          return (
-            <div
-              key={rule.rule_id}
-              className={cn("panel group relative flex flex-col transition-colors hover:border-line-strong", !inSelectedSet && "opacity-40")}
-            >
-              <div className="px-[18px] pt-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <Link
-                      href={`/rules/${rule.rule_id}`}
-                      className="block truncate text-[14px] font-semibold text-ink after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
-                    >
-                      {rule.name}
-                    </Link>
-                    <div className="mt-0.5 truncate text-[11.5px] text-ink-3">
-                      {rule.scope.counterparty_matches?.join(", ") ?? "Any counterparty"}
-                      {rule.scope.rail ? ` · ${rule.scope.rail.toUpperCase()}` : ""}
-                    </div>
-                  </div>
-                  <Pill tone={STATUS_TONE[rule.status]} dot>
-                    {rule.status}
-                  </Pill>
-                </div>
-              </div>
-              <div className="flex-1 px-[18px] pt-3.5">
-                <ul className="flex flex-col">
-                  {(rule.deductions ?? []).slice(0, 4).map((d, i) => (
-                    <li key={i} className="flex items-baseline justify-between border-b border-line py-1.5 text-[12.5px] last:border-0">
-                      <span className="text-ink-2">
-                        {humanizeSnakeCase(d.type)} <span className="text-ink-3">on {d.basis}</span>
-                      </span>
-                      <span className="num text-[15px] font-semibold text-ink">{d.rate != null ? `${d.rate}%` : formatPaise(d.fixed_paise ?? 0)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div className="mt-3 flex items-center gap-2 border-t border-line px-[18px] py-3 text-[11px] text-ink-3">
-                <span className="num rounded-[5px] border border-line-strong px-1.5 py-0.5 text-ink-2">v{rule.version}</span>
-                <span className="num">{rule.scope.rule_set ?? "default"}</span>
-                <span className="num">· from {rule.effective_from}</span>
-                <span className="ml-auto" title="Back-tested against exceptions a human already resolved or wrote off">
-                  {bt ? `${bt.would_explain.count} cases explained` : "…"}
-                </span>
-              </div>
-              {rule.status === "draft" && (
-                <div className="relative z-10 flex items-center gap-2 border-t border-line px-[18px] py-2.5">
-                  {confirmDeleteId === key ? (
-                    <>
-                      <span className="text-[11.5px] text-ink-2">Delete v{rule.version}? This cannot be undone.</span>
-                      <Button size="sm" variant="bad" disabled={busy} onClick={() => deleteInline(rule)}>
-                        Delete
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>
-                        Keep
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button size="sm" variant="ok" disabled={busy} onClick={() => activateInline(rule)}>
-                        {busy ? "Working…" : "Activate"}
-                      </Button>
-                      <Button size="sm" variant="bad" disabled={busy} onClick={() => setConfirmDeleteId(key)}>
-                        Delete draft
-                      </Button>
-                    </>
-                  )}
-                  <span className="ml-auto flex items-center gap-1 text-[11.5px] text-ink-2 opacity-0 transition-opacity group-hover:opacity-100">
-                    Open <ArrowRight width={12} height={12} />
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {suggestions.map((s) => (
-          <div key={s.signature} className="panel-model relative flex flex-col px-[18px] pt-4 pb-4 transition-colors hover:border-model">
-            <div className="flex items-center gap-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-model uppercase">
-              <Sparkles width={11} height={11} />
-              Learned suggestion
-            </div>
-            <Link
-              href={`/rules/${s.rule.rule_id}`}
-              className="mt-2 block text-[14px] font-semibold text-ink after:absolute after:inset-0 after:content-[''] focus-visible:outline-none"
-            >
-              {s.rule.name}
-            </Link>
-            <div className="mt-0.5 text-[11.5px] text-ink-3">{humanizeSnakeCase(s.resolution_category)}</div>
-            <div className="mt-3 flex items-center gap-2">
-              <Pill tone="model">Draft only</Pill>
-              <span className="num text-[11.5px] text-ink-3">seen {s.occurrences}× · rate {s.observed_rate_percent}%</span>
-            </div>
-            <p className="mt-3 text-[11.5px] text-model">Suggested rules never activate on their own. A back-test and a human do that.</p>
-            <div className="mt-auto flex items-center justify-between border-t border-model-line pt-3 text-[11px] text-ink-3">
-              <span className="num">{s.exception_ids.length} historical exceptions</span>
-              <span className="flex items-center gap-1 text-ink-2">
-                Review <ArrowRight width={12} height={12} />
-              </span>
-            </div>
-          </div>
+      <div className="mb-6 flex items-center gap-1.5" role="group" aria-label="Filter by status">
+        {STATUSES.map((s) => (
+          <button
+            key={s.value}
+            type="button"
+            onClick={() => setStatus(status === s.value ? null : s.value)}
+            className="fc-chip fc-num"
+            style={{
+              cursor: "pointer",
+              border: "1px solid transparent",
+              ...(status === s.value ? { borderColor: "var(--fc-accent)", color: "var(--fc-text)" } : undefined),
+              opacity: status && status !== s.value ? 0.5 : 1,
+            }}
+            aria-pressed={status === s.value}
+          >
+            {s.label} {counts[s.value]}
+          </button>
         ))}
       </div>
 
-      {pendingBacktest && (
-        <BacktestDialog
-          ruleId={pendingBacktest.ruleId}
-          version={pendingBacktest.version}
-          ruleName={pendingBacktest.name}
-          onClose={() => setPendingBacktest(null)}
-          onActivated={() => {
-            setPendingBacktest(null);
-            reload();
-          }}
-        />
+      {rules.isLoading && (
+        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <FcSkeleton key={i} className="h-[210px]" />
+          ))}
+        </div>
       )}
-    </div>
+      {rules.error && <FcErrorNote message={errorMessage(rules.error)} />}
+
+      {rules.data && groups.length === 0 && (
+        <FcCard>
+          <div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
+            <div className="fc-strong" style={{ fontSize: 14 }}>
+              {status ? `No ${status} rules here` : "No rules match"}
+            </div>
+            <div className="fc-faint max-w-sm" style={{ fontSize: 12.5 }}>
+              A rule explains a recurring deduction: MDR, GST on the fee, TDS. Draft one, back-test it, and activate it
+              when the numbers hold.
+            </div>
+            <button className="fc-btn mt-2" onClick={() => setAuthoring(true)}>
+              <Plus size={14} />
+              Create rule
+            </button>
+          </div>
+        </FcCard>
+      )}
+
+      <div ref={groupsRef}>
+      {groups.map(([group, list]) => {
+        const isCollapsed = collapsed.has(group);
+        let explained = 0;
+        let anyFired = false;
+        for (const r of list) {
+          const u = usage.get(r.rule_id);
+          if (u && u.fired > 0) {
+            explained += u.explained;
+            anyFired = true;
+          }
+        }
+        return (
+          <section key={group} className="mb-6">
+            <button
+              type="button"
+              onClick={() => toggleGroup(group)}
+              className="mb-3 flex w-full items-center justify-between gap-4"
+            >
+              <span className="flex items-center gap-1.5">
+                {isCollapsed ? (
+                  <ChevronRight size={14} className="fc-faint" />
+                ) : (
+                  <ChevronDown size={14} className="fc-faint" />
+                )}
+                <span className="fc-strong" style={{ fontSize: 13.5, letterSpacing: "0.02em", textTransform: "uppercase" }}>
+                  {group === GENERAL ? "General" : group}
+                </span>
+              </span>
+              <span className="fc-faint fc-num" style={{ fontSize: 12 }}>
+                {plural(list.length, "rule")} ·{" "}
+                {anyFired ? <span style={{ color: "var(--fc-ok)" }}>{money(explained)} explained</span> : "never fired"}
+              </span>
+            </button>
+            {!isCollapsed && (() => {
+              const isExpanded = expandedGroups.has(group);
+              const shown = isExpanded ? list : list.slice(0, GROUP_PREVIEW_COUNT);
+              const hidden = list.length - shown.length;
+              return (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+                    {shown.map((r) => (
+                      <RuleCard
+                        key={`${r.rule_id}:${r.version}`}
+                        rule={r}
+                        usage={usage.get(r.rule_id)}
+                        onOpen={() => {
+                          setPromptBacktest(false);
+                          setSelectedId(r.rule_id);
+                        }}
+                      />
+                    ))}
+                  </div>
+                  {hidden > 0 && (
+                    <button
+                      type="button"
+                      className="fc-btn fc-btn--ghost mt-3"
+                      style={{ padding: "6px 14px", fontSize: 12 }}
+                      onClick={() =>
+                        setExpandedGroups((prev) => {
+                          const next = new Set(prev);
+                          next.add(group);
+                          return next;
+                        })
+                      }
+                    >
+                      View {plural(hidden, "more rule")}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
+          </section>
+        );
+      })}
+      </div>
+
+      <RuleDetail
+        rule={selected}
+        open={!!selected}
+        onClose={() => setSelectedId(null)}
+        usage={selected ? usage.get(selected.rule_id) : undefined}
+        promptBacktest={promptBacktest}
+      />
+
+      <AuthorRule
+        open={authoring}
+        onClose={() => setAuthoring(false)}
+        ruleSets={ruleSetNames}
+        defaultDateFrom={run?.period_start ?? null}
+        onCreated={(rule) => {
+          setAuthoring(false);
+          setCreated(rule);
+          setPromptBacktest(true);
+          setSelectedId(rule.rule_id);
+        }}
+      />
+    </FcPage>
   );
 }
-
-export type { components };

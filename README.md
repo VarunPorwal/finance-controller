@@ -323,18 +323,40 @@ a narration carrying instruction-shaped text is flagged to you as
 
 | Screen | What it shows |
 |---|---|
-| Overview | Matched, rule-explained and waiting-for-you, at a glance |
-| Ingest | Files in, rows read, rows rejected and why |
-| Exceptions | The ranked queue. Open one for the evidence pack, the consequence of ignoring it and the recommended action |
+| Overview | Is my money under control? Matched, rule-explained and waiting-for-you, at a glance |
+| Run | Files in, rows read, rows rejected and why, then the reconciliation stage by stage |
+| Decisions | The ranked queue. Open one for the evidence, the consequence of ignoring it and the recommended action |
+| Settlements | Every settlement as a register: reported, credited, booked, and where it stands |
 | Reconcile | Gross to bank, line by line. Click any line to open the rows behind it |
 | Cash | At risk, held in reserve, claimable as GST input credit |
 | Rule Book | Deduction policy as versioned rules. Draft, back-test, activate |
-| Ask | Plain-English questions answered from the data, with the SQL shown |
-| Controller Activity | What the system did this run, and every model call with its fallback |
+| Controller Activity | What the engine did this run, and every model call with its fallback |
 | Audit Trail | Every decision in a hash chain. Export as CSV or JSONL |
 | Evaluation | Precision and recall per stage, the coverage curve, the four gates |
 | Records | Every normalised row from every source, searchable |
 | Guide | What this is, the architecture, and a ten-minute walkthrough |
+| Settings | Notification address and the run-complete email toggle |
+
+The assistant in the top bar answers plain-English questions from the data and
+shows the SQL it ran.
+
+### Email notifications
+
+The controller reports without being asked. With an address set in Settings:
+
+| Email | Sent when |
+|---|---|
+| Run summary | a reconciliation completes: matched, rule-resolved, decisions waiting, cash at risk |
+| Escalation alert | a decision reaches the escalate tier |
+| Daily digest | the scheduler's daily job |
+| Rule suggestion | the learner drafts a rule from repeated fixes |
+| Deadline reminder | 48 hours before a chargeback or reserve deadline |
+
+`POST /settings/send-run-summary` sends the run summary on demand, so the flow
+can be exercised without waiting for a run. Sending is fire-and-forget: a mail
+provider outage never fails or blocks the run that triggered it, and every
+interpolated value is HTML-escaped, because a bank narration is the least
+trustworthy string in the system.
 
 ---
 
