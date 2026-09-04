@@ -72,13 +72,13 @@ function CompactStrip({ bridge }: { bridge: NonNullable<ReturnType<typeof useCas
   ];
 
   return (
-    <div className="fc-card mb-3" style={{ display: "flex", padding: "12px 17px", minHeight: 52 }}>
+    <div className="fc-card mb-3" style={{ display: "flex", flexWrap: "wrap", rowGap: 12, padding: "12px 17px", minHeight: 52 }}>
       {items.map((it, i) => (
         <div
           key={it.key}
           className="flex min-w-0 flex-col justify-center"
           style={{
-            flex: 1,
+            flex: "1 1 150px",
             borderLeft: i > 0 ? "1px solid var(--fc-divider)" : undefined,
             paddingLeft: i > 0 ? 20 : 0,
             paddingRight: 20,

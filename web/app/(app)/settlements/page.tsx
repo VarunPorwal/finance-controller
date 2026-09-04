@@ -25,14 +25,14 @@ function HeaderStrip({ register }: { register: Register }) {
   ];
   return (
     <div
-      className="mb-3 flex items-stretch"
+      className="mb-3 flex flex-wrap items-stretch"
       style={{ background: "var(--fc-card-grad)", border: "1px solid var(--fc-border)", borderRadius: "var(--fc-r)", minHeight: 52 }}
     >
       {items.map((it, i) => (
         <div
           key={it.label}
-          className="flex flex-1 flex-col justify-center"
-          style={{ padding: "8px 18px", borderLeft: i > 0 ? "1px solid var(--fc-divider)" : undefined }}
+          className="flex min-w-0 flex-col justify-center"
+          style={{ flex: "1 1 150px", padding: "8px 18px", borderLeft: i > 0 ? "1px solid var(--fc-divider)" : undefined }}
         >
           <div className="fc-label" style={{ fontSize: 11 }}>{it.label}</div>
           <div className="fc-num mt-0.5" style={{ fontSize: 18, fontWeight: 500, letterSpacing: "-0.01em" }}>

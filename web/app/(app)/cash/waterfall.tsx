@@ -125,7 +125,9 @@ export function Waterfall({ bridge }: { bridge: CashBridge }) {
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width;
-      if (w) setWidth(Math.max(480, Math.floor(w)));
+      // Seven labelled bars need about 700px to stay legible; narrower
+      // containers scroll the chart sideways instead of squeezing it.
+      if (w) setWidth(Math.max(720, Math.floor(w)));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -143,7 +145,9 @@ export function Waterfall({ bridge }: { bridge: CashBridge }) {
   const barW = Math.min(88, slot * 0.62);
 
   return (
-    <div ref={wrap} className="relative w-full">
+    // Below 480px of room the chart keeps its minimum width and the wrapper
+    // scrolls sideways, rather than squeezing seven bars into a phone.
+    <div ref={wrap} className="relative w-full overflow-x-auto">
       <svg width={width} height={H} viewBox={`0 0 ${width} ${H}`} className="block" role="img" aria-label="Cash bridge waterfall">
         <line x1={PAD_X} x2={width - PAD_X} y1={baseline} y2={baseline} stroke="var(--fc-divider)" />
         {[0.25, 0.5, 0.75, 1].map((f) => (

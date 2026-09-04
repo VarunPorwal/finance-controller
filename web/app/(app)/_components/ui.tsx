@@ -14,7 +14,7 @@ export type Tone = "ok" | "warn" | "bad" | "model" | "brass" | "neutral";
 /* ---------- layout ---------- */
 
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={clsx("mx-auto w-full max-w-[1440px] px-6 pb-16 pt-5", className)}>{children}</div>;
+  return <div className={clsx("mx-auto w-full max-w-[1440px] px-4 pb-16 pt-5 sm:px-6", className)}>{children}</div>;
 }
 
 export function PageHeader({
@@ -29,13 +29,13 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-6 flex items-end justify-between gap-6">
-      <div>
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      <div className="min-w-0">
         {eyebrow && <div className="app-eyebrow mb-1.5">{eyebrow}</div>}
         <h1 className="app-h1">{title}</h1>
         {question && <p className="app-muted mt-1 text-[13px]">{question}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

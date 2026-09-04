@@ -80,11 +80,11 @@ export function SubBar({
   asOfIso: string | null | undefined;
 }) {
   return (
-    <div className="mb-3 flex items-center justify-between gap-4">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       {reconciledPct === undefined ? (
         skel("h-5 w-[46%]")
       ) : (
-        <p className="fc-body flex items-center gap-2" style={{ fontSize: 14.5 }}>
+        <p className="fc-body flex flex-wrap items-center gap-x-2 gap-y-1" style={{ fontSize: 14.5 }}>
           <span className="fc-dot fc-dot--accent" />
           Books are{" "}
           <WhyWrap>

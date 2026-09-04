@@ -777,25 +777,58 @@ a.fc-plain-link:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
-  .fc-rail {
-    flex-direction: row;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--fc-border);
-    padding: 12px;
-  }
-  .fc-brand {
-    margin-bottom: 0;
-  }
-  .fc-rail-foot {
-    display: none;
-  }
+/* Phone-width layout. The rail is an off-canvas drawer below md (see
+   .app-sidebar-drawer), so it keeps its column layout here; the old rule that
+   turned it into a horizontal strip collapsed the nav inside the drawer. */
+@media (max-width: 767px) {
   .fc-row4 {
     grid-template-columns: 1fr;
   }
-  .fc-main {
-    padding: 18px 16px 28px;
+  .fc-main,
+  .fc-page {
+    padding: 14px 14px 32px !important;
+  }
+  .fc-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 10px;
+  }
+  .fc-head h1 {
+    font-size: 24px;
+  }
+  .fc-head > div:last-child {
+    flex-wrap: wrap;
+  }
+  .fc-sub {
+    flex-wrap: wrap;
+  }
+  .fc-chip {
+    white-space: normal;
+  }
+  /* Multi-column grids stack. Bracketed templates (key/value pairs, icon +
+     text rows) are two-column by meaning and are left alone. */
+  .grid[class*="grid-cols-"]:not([class*="grid-cols-["]):not([class*="sm:"]):not([class*="md:"]):not([class*="lg:"]) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .fc-split,
+  .fc-row4 {
+    grid-template-columns: 1fr !important;
+  }
+  /* Wide tables scroll inside their own box instead of pushing the page. */
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .fc-card,
+  .app-card {
+    min-width: 0;
+  }
+  .app-sidebar-drawer {
+    width: min(286px, 86vw);
+  }
+  .app-sidebar-drawer .fc-rail {
+    width: 100% !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {

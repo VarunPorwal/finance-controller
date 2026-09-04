@@ -20,7 +20,7 @@ const toneVar: Record<FcTone, string> = {
 };
 
 export function FcPage({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={clsx("mx-auto w-full max-w-[1440px]", className)} style={{ padding: "20px 26px 40px" }}>{children}</div>;
+  return <div className={clsx("fc-page mx-auto w-full max-w-[1440px]", className)} style={{ padding: "20px 26px 40px" }}>{children}</div>;
 }
 
 export function FcHead({ title, sub, actions }: { title: ReactNode; sub?: ReactNode; actions?: ReactNode }) {
