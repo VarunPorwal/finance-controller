@@ -107,7 +107,7 @@ export function Pipeline({
   useEffect(() => {
     if (done && result) {
       setRedirecting(true);
-      const t = window.setTimeout(() => router.push("/"), 1600);
+      const t = window.setTimeout(() => router.push("/overview"), 1600);
       return () => window.clearTimeout(t);
     }
     setRedirecting(false);
@@ -198,7 +198,7 @@ export function Pipeline({
             <span className="fc-faint" style={{ fontSize: 12 }}>
               {redirecting ? "Routing to Overview…" : "Run complete."}
             </span>
-            <button className="fc-btn fc-btn--light inline-flex items-center gap-1.5" onClick={() => router.push("/")}>
+            <button className="fc-btn fc-btn--light inline-flex items-center gap-1.5" onClick={() => router.push("/overview")}>
               Go to Overview <ArrowRight size={13} />
             </button>
           </div>

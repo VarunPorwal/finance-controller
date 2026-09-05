@@ -29,7 +29,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { openAssistant } = useShell();
   const { theme, toggle } = useTheme();
 
-  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  const isActive = (href: string) => pathname.startsWith(href);
 
   return (
     <aside className="fc-rail h-full" style={{ width: 286, flexShrink: 0, background: "var(--fc-bg)", borderRight: "1px solid var(--fc-border)" }}>

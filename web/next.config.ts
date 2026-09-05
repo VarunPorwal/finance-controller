@@ -11,7 +11,8 @@ const nextConfig: NextConfig = {
       { source: "/exceptions/:id", destination: "/decisions", permanent: true },
       { source: "/activity", destination: "/controller-activity", permanent: true },
       { source: "/eval", destination: "/evaluation", permanent: true },
-      { source: "/app1", destination: "/", permanent: true },
+      { source: "/", destination: "/landing", permanent: false },
+      { source: "/app1", destination: "/overview", permanent: true },
       { source: "/app1/:path*", destination: "/:path*", permanent: true },
     ];
   },

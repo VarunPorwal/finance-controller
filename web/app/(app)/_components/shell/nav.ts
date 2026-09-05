@@ -23,7 +23,7 @@ export interface NavItem {
 }
 
 export const DAILY: NavItem[] = [
-  { href: "/", label: "Overview", question: "Is my money under control?", icon: LayoutDashboard },
+  { href: "/overview", label: "Overview", question: "Is my money under control?", icon: LayoutDashboard },
   { href: "/run", label: "Run", question: "Did it read my evidence correctly?", icon: Play },
   { href: "/decisions", label: "Decisions", question: "Where is my money unexplained?", icon: Gavel },
   { href: "/settlements", label: "Settlements", question: "What did each settlement actually do?", icon: ArrowLeftRight },
@@ -45,6 +45,6 @@ export const SETTINGS: NavItem = { href: "/settings", label: "Settings", questio
 export const ALL_NAV = [...DAILY, ...EVIDENCE, SETTINGS];
 
 export function activeNav(pathname: string): NavItem | undefined {
-  if (pathname === "/" || pathname === "/") return DAILY[0];
-  return ALL_NAV.filter((n) => n.href !== "/").find((n) => pathname.startsWith(n.href));
+  if (pathname === "/overview" || pathname === "/overview/") return DAILY[0];
+  return ALL_NAV.filter((n) => n.href !== "/overview").find((n) => pathname.startsWith(n.href));
 }

@@ -6,8 +6,8 @@
 // figures (CLAUDE.md: "a figure appears on one screen only").
 
 import { useMemo } from "react";
-import { ErrorNote } from "./_components/ui";
-import { sumPaise } from "./_lib/format";
+import { ErrorNote } from "../_components/ui";
+import { sumPaise } from "../_lib/format";
 import {
   useCashBridge,
   useEvents,
@@ -18,7 +18,7 @@ import {
   useRuns,
   type CashBridge,
   type Exception,
-} from "./_lib/api";
+} from "../_lib/api";
 import {
   AgentBanner,
   CashPosition,
@@ -30,7 +30,7 @@ import {
   UnmatchedByRun,
   openExceptionsOf,
   openSubtotalOf,
-} from "./_overview-fc/blocks";
+} from "../_overview-fc/blocks";
 
 function reconciledPctOf(bridge: CashBridge | undefined): number | undefined {
   if (!bridge) return undefined;

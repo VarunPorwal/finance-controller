@@ -114,7 +114,7 @@ const TOUR: { href: string; label: string; icon: LucideIcon; see: string; try: s
     try: "Upload a Razorpay JSON, a bank CSV and a Tally export, or run the seeded demo data that is already there.",
   },
   {
-    href: "/",
+    href: "/overview",
     label: "Overview",
     icon: LayoutDashboard,
     see: "The books at a glance: how much matched on its own, how much a rule explained, and how many decisions are waiting for you.",
